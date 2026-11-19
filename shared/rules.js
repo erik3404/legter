@@ -5,16 +5,24 @@
 }(typeof self !== 'undefined' ? self : this, function () {
     'use strict';
 
+    // A multi menü sorrendje: a két fő mód elöl.
     const MODES = {
-        free: { label: 'Szabad', desc: 'Mindenki minden gépet irányíthat, közös pontszám.' },
-        sector: { label: 'Szektoros', desc: 'A légteret szeletekre osztjuk, mindenki a saját szeletét kezeli. A reptér körüli torony-zóna közös.' },
-        roles: { label: 'Repteres (Fel/Le)', desc: 'Szerepek: az induló a felszállókat, az érkező a leszállókat irányítja. Az átrepülőket mindenki.' }
+        airports: {
+            label: 'Saját reptér (2–3 fő)', maxPlayers: 3, needsCluster: true,
+            desc: 'Egy pálya több repülőtérrel: ahányan vagytok (legfeljebb 3), annyi reptér él, és mindenki csak a saját repterének gépeit irányítja.'
+        },
+        roles: {
+            label: 'Leszállás + felszállás (2 fő)', maxPlayers: 2,
+            desc: 'Egy reptér, két irányító: az egyik a leszálló, a másik a felszálló gépekért felel. Az átrepülőket mindketten irányíthatják.'
+        },
+        free: { label: 'Szabad (közös irányítás)', maxPlayers: 6, desc: 'Mindenki minden gépet irányíthat, közös pontszám.' },
+        sector: { label: 'Szektoros', maxPlayers: 6, desc: 'A légteret szeletekre osztjuk, mindenki a saját szeletét kezeli. A reptér körüli torony-zóna közös.' }
     };
 
     const ROLES = {
-        all: 'Mindkettő',
-        dep: 'Induló (felszállók)',
-        arr: 'Érkező (leszállók)'
+        arr: 'Leszállók (érkezők)',
+        dep: 'Felszállók (indulók)',
+        all: 'Mindkettő'
     };
 
     const TOWER_RADIUS = 4;
@@ -53,18 +61,23 @@
             off: 0.9, on: 1
         },
         {
-            key: 'emergencies', group: 'events', label: 'Vészhelyzetek',
-            desc: 'Egy érkező vészhelyzetet jelenthet: lassabb, és 6 percen belül le kell szállnia.',
+            key: 'emergencies', group: 'events', label: 'Vészhelyzetek és kényszerleszállás',
+            desc: 'Egy érkező vészhelyzetet jelenthet: lassabb, és 6 percen belül le kell szállnia. Kényszerleszállásnál amíg le nem száll, a repterén senki más nem szállhat le.',
             off: 0.95, on: 1
         },
         {
-            key: 'storms', group: 'events', label: 'Zivatarok',
-            desc: 'Ritkán egy kis zivatar sodródik lassan a légtérben. A zöld és sárga rész átrepülhető, de ha egy gép a piros magba repül, vége a műszaknak.',
+            key: 'storms', group: 'events', label: 'Zivatarok és hurrikán',
+            desc: 'Ritkán egy kis zivatar sodródik lassan a légtérben. A zöld és sárga rész átrepülhető, de ha egy gép a piros magba repül, vége a műszaknak. 1% eséllyel hurrikán lesz belőle: sokkal nagyobb és gyorsabb.',
             off: 0.9, on: 1
         },
         {
             key: 'fog', group: 'events', label: 'Köd',
             desc: 'Ritkán egy kis ködfolt sodródik a légtérben. A benne repülő gép nem tudja, hol jár: egyenesen repül tovább, és amíg ki nem ér, nem irányítható.',
+            off: 0.95, on: 1
+        },
+        {
+            key: 'security', group: 'events', label: 'Eltérítések',
+            desc: 'Ritkán egy gépet eltérítenek: nem válaszol, és egy reptér felé fordul. Indíts vadászgépeket (F), hogy elfogják és leszállásra kísérjék, mielőtt odaér.',
             off: 0.95, on: 1
         },
         {
@@ -77,11 +90,11 @@
     const PRESETS = {
         classic: {
             label: 'Klasszikus',
-            rules: { altitude: false, manualRouting: false, pauseQueue: false, randomGates: false, constraints: true, emergencies: true, storms: true, fog: true, showAllRoutes: false }
+            rules: { altitude: false, manualRouting: false, pauseQueue: false, randomGates: false, constraints: true, emergencies: true, storms: true, fog: true, security: true, showAllRoutes: false }
         },
         hard: {
             label: 'Nehéz',
-            rules: { altitude: true, manualRouting: true, pauseQueue: true, randomGates: true, constraints: true, emergencies: true, storms: true, fog: true, showAllRoutes: false }
+            rules: { altitude: true, manualRouting: true, pauseQueue: true, randomGates: true, constraints: true, emergencies: true, storms: true, fog: true, security: true, showAllRoutes: false }
         }
     };
 
@@ -155,8 +168,10 @@
 
     // ac: kompakt pillanatkép-objektum (k, st, x, y), player: {role, sector}
     function canControl(ac, player, settings, players) {
+        if (ac.k === 'mil') return false;           // a vadászgépek önállóan repülnek
         const mode = settings.mode || 'free';
-        if (mode === 'free' || !player) return true;
+        if (mode === 'free' || !player || players.length < 2) return true;
+        if (mode === 'airports') return (ac.ap || 0) === (player.airport || 0);
         if (mode === 'roles') {
             const role = player.role || 'all';
             if (role === 'all' || ac.k === 'transit') return true;

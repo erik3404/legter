@@ -104,6 +104,18 @@
                 tone({ freq: 780, type: 'square', start: i * 0.22 + 0.11, dur: 0.1, gain: 0.25, filter: 3000 });
             }
         },
+        // eltérítés: mély–magas váltakozó duda, négyszer
+        hijack() {
+            for (let i = 0; i < 4; i++) {
+                tone({ freq: 440, type: 'sawtooth', start: i * 0.3, dur: 0.14, gain: 0.3, filter: 2200 });
+                tone({ freq: 660, type: 'sawtooth', start: i * 0.3 + 0.15, dur: 0.14, gain: 0.3, filter: 2200 });
+            }
+        },
+        // hurrikán: mély, hosszan emelkedő-ereszkedő búgás
+        hurricane() {
+            tone({ freq: 90, freqEnd: 220, type: 'sawtooth', dur: 1.2, gain: 0.45, filter: 700 });
+            tone({ freq: 220, freqEnd: 90, type: 'sawtooth', start: 1.2, dur: 1.2, gain: 0.45, filter: 700 });
+        },
         // figyelmeztetés (zivatar, kifutózárás): lefelé lépő kettős hang
         warn() {
             tone({ freq: 523, type: 'triangle', dur: 0.16, gain: 0.4 });

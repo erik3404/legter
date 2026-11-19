@@ -31,7 +31,10 @@ app.get(['/', '/index.html'], (req, res) => {
 app.use(express.static(path.join(__dirname, '..', 'public'), staticOptions));
 app.use('/shared', express.static(path.join(__dirname, '..', 'shared'), staticOptions));
 app.get('/api/airports', (req, res) => {
-    res.json(Object.values(AIRPORTS).map((a) => ({ icao: a.icao, name: a.name, runways: a.runways.length })));
+    res.json(Object.values(AIRPORTS).map((a) => ({
+        icao: a.icao, name: a.name, runways: a.runways.length, cluster: !!a.cluster,
+        airports: (a.airports || []).map((x) => ({ icao: x.icao, name: x.name }))
+    })));
 });
 app.get('/healthz', (req, res) => res.send('ok'));
 
@@ -61,7 +64,7 @@ function broadcast(room, msg) {
 
 function publicPlayers(room) {
     return [...room.players.values()].map((p) => ({
-        id: p.id, name: p.name, color: p.color, role: p.role, sector: p.sector, selected: p.selected
+        id: p.id, name: p.name, color: p.color, role: p.role, sector: p.sector, airport: p.airport, selected: p.selected
     }));
 }
 
@@ -86,6 +89,12 @@ function freeColor(room) {
     return PLAYER_COLORS.find((c) => !used.has(c)) || PLAYER_COLORS[room.players.size % PLAYER_COLORS.length];
 }
 
+function freeAirport(room) {
+    const used = new Set([...room.players.values()].map((p) => p.airport));
+    for (let i = 0; i < 3; i++) if (!used.has(i)) return i;
+    return 0;
+}
+
 function freeSector(room) {
     const used = new Set([...room.players.values()].map((p) => p.sector));
     for (let i = 0; i < 6; i++) if (!used.has(i)) return i;
@@ -104,11 +113,12 @@ function addPlayer(room, ws, name) {
         color: freeColor(room),
         role: 'all',
         sector: freeSector(room),
+        airport: freeAirport(room),
         selected: null
     };
     // a repteres módban az új játékos a még üres szerepet kapja
     const roles = [...room.players.values()].map((p) => p.role);
-    player.role = ['dep', 'arr'].find((r) => !roles.includes(r)) || 'all';
+    player.role = ['arr', 'dep'].find((r) => !roles.includes(r)) || 'all';
     room.players.set(player.id, player);
     if (!room.hostId) room.hostId = player.id;
     ws.roomCode = room.code;
@@ -156,14 +166,41 @@ function createRoom(settings) {
     return room;
 }
 
+// indítás előtti ellenőrzés; hibaüzenetet ad vissza, ha valami nem stimmel
+function checkStart(room) {
+    const mode = Rules.MODES[room.settings.mode];
+    const n = room.players.size;
+    if (n > mode.maxPlayers) return `A(z) „${mode.label}” módban legfeljebb ${mode.maxPlayers} fő játszhat.`;
+    if (mode.needsCluster && !AIRPORTS[room.settings.airport].cluster) {
+        return 'A „Saját reptér” módhoz többrepteres pályát válassz (London, New York, Washington vagy Tokió).';
+    }
+    return null;
+}
+
 function startGame(room) {
-    room.sim = new Sim(room.settings.airport, room.settings.shift);
+    const opts = {};
+    if (room.settings.mode === 'airports') {
+        const count = Math.min(room.players.size, AIRPORTS[room.settings.airport].airports.length);
+        opts.airportCount = count;
+        // mindenki más repteret kapjon: ütközés vagy túl nagy szám esetén sorban újraosztjuk
+        const players = [...room.players.values()];
+        const seen = new Set();
+        const valid = players.every((p) => p.airport < count && !seen.has(p.airport) && seen.add(p.airport));
+        if (!valid) players.forEach((p, i) => { p.airport = i % count; });
+    }
+    room.sim = new Sim(room.settings.airport, room.settings.shift, opts);
     room.paused = false;
     room.queued = [];
     // csak automatikus teszthez: LEGTER_TEST_WEATHER=1 azonnal zivatart és ködöt hoz
     if (process.env.LEGTER_TEST_WEATHER) {
         room.sim.timers.storm = 2;
         room.sim.timers.fog = 1;
+        if (process.env.LEGTER_TEST_WEATHER === 'events') {
+            room.sim.forceHurricane = true;
+            room.sim.forceForcedLanding = true;
+            room.sim.timers.hijack = 6;
+            room.sim.timers.emergency = 9;
+        }
         if (process.env.LEGTER_TEST_WEATHER === 'gameover') {
             const sim = room.sim;
             setTimeout(() => { if (room.sim === sim) sim.gameOver = { reason: 'TESZT123 berepült a zivatar piros magjába.' }; }, 3000);
@@ -209,7 +246,7 @@ function runCommand(room, player, cmd, reply) {
 }
 
 function compactForRules(ac) {
-    return { k: ac.kind, st: ac.state, x: ac.x, y: ac.y };
+    return { k: ac.kind, st: ac.state, x: ac.x, y: ac.y, ap: ac.home };
 }
 
 function handle(ws, msg) {
@@ -224,7 +261,8 @@ function handle(ws, msg) {
     if (msg.t === 'join') {
         const room = rooms.get(String(msg.code || '').toUpperCase());
         if (!room) return send(ws, { t: 'error', text: 'Nincs ilyen szoba. Ellenőrizd a kódot.' });
-        if (room.players.size >= 6) return send(ws, { t: 'error', text: 'A szoba megtelt (max. 6 fő).' });
+        const max = Rules.MODES[room.settings.mode].maxPlayers;
+        if (room.players.size >= max) return send(ws, { t: 'error', text: `A szoba megtelt (ebben a módban legfeljebb ${max} fő).` });
         if (ws.roomCode) removePlayer(ws);
         addPlayer(room, ws, msg.name);
         return;
@@ -242,7 +280,11 @@ function handle(ws, msg) {
             const s = msg.settings || {};
             if (!room.sim && AIRPORTS[s.airport]) room.settings.airport = s.airport;
             if (!room.sim && s.shift) room.settings.shift = Rules.normalizeShift(s.shift);
-            if (Rules.MODES[s.mode]) room.settings.mode = s.mode;
+            if (Rules.MODES[s.mode]) {
+                room.settings.mode = s.mode;
+                // a „Saját reptér” módhoz többrepteres pálya kell
+                if (Rules.MODES[s.mode].needsCluster && !AIRPORTS[room.settings.airport].cluster && !room.sim) room.settings.airport = 'LONDON';
+            }
             if (typeof s.sectorOffset === 'number') room.settings.sectorOffset = ((Math.round(s.sectorOffset) % 360) + 360) % 360;
             sendRoom(room);
             break;
@@ -252,13 +294,18 @@ function handle(ws, msg) {
             if (!target) return;
             if (Rules.ROLES[msg.role]) target.role = msg.role;
             if (Number.isInteger(msg.sector) && msg.sector >= 0 && msg.sector < 6) target.sector = msg.sector;
+            if (Number.isInteger(msg.airport) && msg.airport >= 0 && msg.airport < 3) target.airport = msg.airport;
             if (msg.name && target === player) target.name = cleanName(msg.name);
             sendRoom(room);
             break;
         }
-        case 'start':
-            if (isHost && !room.sim) startGame(room);
+        case 'start': {
+            if (!isHost || room.sim) break;
+            const problem = checkStart(room);
+            if (problem) return send(ws, { t: 'error', text: problem });
+            startGame(room);
             break;
+        }
         case 'end':
             if (isHost && room.sim) endGame(room, null);
             break;
@@ -290,7 +337,8 @@ function handle(ws, msg) {
             if (cmd.type === 'flipRunway' && !isHost && room.settings.mode !== 'free') {
                 return send(ws, { t: 'cmdResult', ok: false, text: 'Az üzemi irányt csak a szobagazda fordíthatja.' });
             }
-            if (cmd.id != null) {
+            // vadászgépet bárki indíthat, akármelyik gépet térítették el
+            if (cmd.id != null && cmd.type !== 'scramble') {
                 const ac = room.sim.find(cmd.id);
                 if (!ac) return send(ws, { t: 'cmdResult', ok: false, text: 'Ez a gép már nincs a légtérben.' });
                 const players = publicPlayers(room);

@@ -9,7 +9,7 @@ const AIRPORTS = require('../shared/airports.json');
 const OUT_DIR = path.join(__dirname, '..', 'shared', 'maps');
 const NM = 1852;
 const R_NM = 6371000 / NM;
-const BOX = 34;          // ekkora négyzetre vágunk (nm, a középponttól)
+let BOX = 34;            // ekkora négyzetre vágunk (nm, a középponttól); többrepteres pályánál nagyobb
 const TOL = 0.06;        // egyszerűsítési tűrés (nm)
 
 const load = (f) => JSON.parse(fs.readFileSync(path.join(NE_DIR, `${f}.geojson`), 'utf8')).features;
@@ -163,6 +163,7 @@ function polylines(features, proj, lat0, lon0, propsFn) {
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
 for (const ap of Object.values(AIRPORTS)) {
+    BOX = ap.cluster ? 44 : 34;
     const proj = projector(ap.lat, ap.lon);
     const map = {
         source: 'Natural Earth (public domain); terep: openScope (MIT)',
@@ -180,8 +181,10 @@ for (const ap of Object.values(AIRPORTS)) {
             map.places.push({ n: f.properties.name, x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100, r: f.properties.scalerank, pop: f.properties.pop_max });
         }
     }
-    const tf = path.join(TERRAIN_DIR, `${ap.icao.toLowerCase()}.geojson`);
-    if (fs.existsSync(tf)) {
+    // a terep a pálya összes repteréről
+    for (const member of ap.airports) {
+        const tf = path.join(TERRAIN_DIR, `${member.icao.toLowerCase()}.geojson`);
+        if (!fs.existsSync(tf)) continue;
         const t = JSON.parse(fs.readFileSync(tf, 'utf8'));
         for (const f of t.features) {
             const elev = f.properties.elevation;

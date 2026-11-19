@@ -4,10 +4,10 @@
 
     const Rules = window.LegterRules;
     const $ = (id) => document.getElementById(id);
-    const KIND_LABEL = { arr: 'ÉRK', dep: 'IND', transit: 'ÁTR' };
-    const KIND_NAME = { arr: 'Érkező', dep: 'Induló', transit: 'Átrepülő' };
+    const KIND_LABEL = { arr: 'ÉRK', dep: 'IND', transit: 'ÁTR', mil: 'VAD' };
+    const KIND_NAME = { arr: 'Érkező', dep: 'Induló', transit: 'Átrepülő', mil: 'Katonai' };
     const COLORS = {
-        arr: '#ff6f7d', dep: '#5fa8ff', transit: '#f5c451', em: '#c58cff', bad: '#ff4d5e',
+        arr: '#ff6f7d', dep: '#5fa8ff', transit: '#f5c451', em: '#c58cff', bad: '#ff4d5e', mil: '#7bd88f', hj: '#ff9f1c',
         grid: 'rgba(120,150,190,0.08)', border: 'rgba(79,209,197,0.35)',
         text: '#c9d4e3', muted: '#6f7f96', accent: '#4fd1c5'
     };
@@ -171,7 +171,10 @@
         return rw ? rw.names[rwState(idx).e] : '–';
     };
     const fl = (alt) => String(Math.round(alt / 100)).padStart(3, '0');
-    const acColor = (a) => (a.em != null ? COLORS.em : COLORS[a.k]);
+    const acColor = (a) => (a.hj ? COLORS.hj : a.em != null ? COLORS.em : COLORS[a.k]);
+    const acBadge = (a) => (a.hj ? 'ELTÉR' : a.pr ? 'KÉNYSZ' : a.em != null ? 'VÉSZ' : KIND_LABEL[a.k]);
+    const multiAirport = () => state.info && state.info.airports && state.info.airports.length > 1;
+    const apCode = (i) => (state.info && state.info.airports[i] ? state.info.airports[i].icao : '');
 
     function addLog(kind, text, t, by, color) {
         const entry = { kind, text, t: t != null ? t : (state.snap ? Math.round(state.snap.t) : 0), by, color };
@@ -194,7 +197,7 @@
 
     // csak azokról a gépekről szólunk, amelyeket a játékos irányíthat
     function relevant(ev) {
-        if (ev.sound === 'good' || ev.sound === 'incident' || ev.sound === 'warn') return true;
+        if (['good', 'incident', 'warn', 'hijack', 'hurricane'].includes(ev.sound)) return true;
         if (ev.sound === 'depReady') return canControl({ k: 'dep', st: 'ground', x: 0, y: 0 });
         const a = ev.aircraftId != null ? state.acById.get(ev.aircraftId) : null;
         return !a || canControl(a);
@@ -223,7 +226,20 @@
             alerts.lastDepReminder = performance.now();
         } else if (ev.sound === 'emergency') {
             const a = state.acById.get(ev.aircraftId);
-            showToast(`<b>${a ? a.cs : ''}</b> VÉSZHELYZET – 6 percen belül le kell szállnia`, 'em', ev.aircraftId);
+            showToast(a && a.pr ? `<b>${a.cs}</b> KÉNYSZERLESZÁLLÁS – amíg le nem száll, senki más nem szállhat le`
+                : `<b>${a ? a.cs : ''}</b> VÉSZHELYZET – 6 percen belül le kell szállnia`, 'em', ev.aircraftId);
+        } else if (ev.sound === 'hijack') {
+            const a = state.acById.get(ev.aircraftId);
+            showToast(`<b>${a ? a.cs : ''}</b> ELTÉRÍTÉS! Koppints ide, vagy nyomd meg az <kbd>F</kbd>-et a vadászgépek indításához.`, 'hj', ev.aircraftId);
+            $('toast').onclick = () => {
+                if (a) {
+                    cmd('scramble', { id: a.id });
+                    select(a.id);
+                }
+                $('toast').hidden = true;
+            };
+        } else if (ev.sound === 'hurricane') {
+            showToast('<b>HURRIKÁN!</b> Tartsd távol a gépeket a piros magjától.', 'em', null);
         }
     }
 
@@ -322,10 +338,13 @@
         } else {
             right = `<div class="timer ${a.f < 90 ? 'low' : ''}">${a.st === 'final' ? 'VÉGSŐ' : a.st === 'rollout' ? 'GURUL' : `${a.f}s`}</div>`;
         }
-        const target = a.k === 'arr' ? (a.rw != null ? `RWY ${runwayLabel(a.rw)}` : 'nincs kifutó')
-            : `<span class="gate-chip">${a.eg}</span>${a.k === 'dep' ? `RWY ${runwayLabel(a.rw)}` : `${a.ig} → ${a.eg}`}${a.xa ? ` · ${a.xa / 100}` : ''}`;
+        const apPrefix = multiAirport() && a.k !== 'mil' ? `${apCode(a.ap)} · ` : '';
+        if (a.k === 'mil') return `<div class="ac-row k-mil" data-id="${a.id}"><span class="badge" style="color:${COLORS.mil}">VAD</span>
+            <div><div class="cs">${a.cs}</div><div class="meta">vadászgép · önálló</div></div><div class="timer"></div></div>`;
+        const target = apPrefix + (a.k === 'arr' ? (a.rw != null ? `RWY ${runwayLabel(a.rw)}` : 'nincs kifutó')
+            : `<span class="gate-chip">${a.eg}</span>${a.k === 'dep' ? `RWY ${runwayLabel(a.rw)}` : `${a.ig} → ${a.eg}`}${a.xa ? ` · ${a.xa / 100}` : ''}`);
         return `<div class="ac-row k-${a.em != null ? 'em' : a.k} ${state.selected === a.id ? 'sel' : ''} ${locked ? 'locked' : ''}" data-id="${a.id}">
-            <span class="badge" style="color:${acColor(a)}">${a.em != null ? 'VÉSZ' : KIND_LABEL[a.k]}</span>
+            <span class="badge" style="color:${acColor(a)}">${acBadge(a)}</span>
             <div><div class="cs">${a.cs}</div><div class="meta">${cls} · ${target}</div></div>
             ${right}</div>`;
     }
@@ -387,13 +406,17 @@
             const owners = Rules.ownersOf(a, state.room.settings, state.room.players).map((p) => p.name);
             ownerNote = `<div class="owner-note">Nem a te géped${owners.length ? ` – ${esc(owners.join(', '))} irányítja` : ''}.</div>`;
         }
-        let emBanner = a.em != null ? `<div class="em-banner">VÉSZHELYZET – még ${fmtTime(a.em)} a leszállásig</div>` : '';
+        let emBanner = a.em != null ? `<div class="em-banner">${a.pr ? 'KÉNYSZERLESZÁLLÁS' : 'VÉSZHELYZET'} – még ${fmtTime(a.em)} a leszállásig${a.pr ? '. Amíg le nem száll, a repterén senki más nem szállhat le.' : ''}</div>` : '';
+        if (a.hj) {
+            emBanner += `<div class="storm-banner">ELTÉRÍTETT GÉP – nem válaszol, ${esc(apCode(a.ap) || 'a reptér')} felé tart.
+                ${a.sc ? 'A vadászgépek úton vannak.' : '<br><button class="btn danger" data-act="scramble">Vadászgépek indítása<kbd>F</kbd></button>'}</div>`;
+        }
         if (a.fg) emBanner += '<div class="fog-banner">KÖDBEN – a pilóta nem tudja, hol jár. Egyenesen repül tovább, és amíg ki nem ér, nem irányítható.</div>';
         if (a.sw) emBanner += '<div class="storm-banner">ZIVATAR! A gép a piros mag felé tart – fordítsd el, különben vége a műszaknak.</div>';
         card.innerHTML = `
             ${emBanner}
-            <div class="sel-head"><span class="cs" style="color:${acColor(a)}">${a.cs}</span><span class="badge" style="color:${acColor(a)}">${KIND_LABEL[a.k]}</span></div>
-            <div class="sel-sub">${KIND_NAME[a.k]} · ${c.label}</div>
+            <div class="sel-head"><span class="cs" style="color:${acColor(a)}">${a.cs}</span><span class="badge" style="color:${acColor(a)}">${acBadge(a)}</span></div>
+            <div class="sel-sub">${KIND_NAME[a.k]} · ${c.label}${multiAirport() && a.k !== 'mil' ? ` · reptér: <b>${esc(apCode(a.ap))}</b>` : ''}</div>
             <div class="sel-grid">
                 <div><div class="tb-label">Állapot</div><div style="font-size:13px">${status}</div></div>
                 <div><div class="tb-label">${a.st === 'ground' ? 'Földi idő' : 'Üzemanyag'}</div><div class="v">${fuel}s</div>
@@ -401,7 +424,7 @@
                 ${alt ? `<div><div class="tb-label">Magasság</div><div class="v">${fl(a.al)}${a.ta !== a.al ? ` → ${fl(a.ta)}` : ''}</div></div>` : ''}
                 <div><div class="tb-label">Sebesség</div><div class="v">${a.s}${a.ts !== a.s ? ` → ${a.ts}` : ''} kt</div></div>
             </div>
-            ${locked || a.fg ? '' : actions}
+            ${locked || a.fg || a.hj || a.k === 'mil' ? '' : actions}
             ${ownerNote}`;
     }
 
@@ -465,7 +488,8 @@
         $('airport-cards').innerHTML = airportsCache.map((a) => `
             <button class="ap-card ${r.settings.airport === a.icao ? 'on' : ''}" data-icao="${a.icao}" ${host ? '' : 'disabled'}>
                 <span class="ap-code">${a.icao}</span>
-                <span><div class="ap-name">${esc(a.name)}</div><div class="ap-desc">${esc(AIRPORT_DESC[a.icao] || `${a.runways} kifutó`)}</div></span>
+                <span><div class="ap-name">${esc(a.name)}${a.cluster ? '<span class="ap-tag">MULTI</span>' : ''}</div>
+                <div class="ap-desc">${esc(a.cluster ? `${a.airports.map((x) => `${x.icao} ${x.name}`).join(', ')}. Ahányan vagytok (max. ${a.airports.length}), annyi reptér él.` : (AIRPORT_DESC[a.icao] || `${a.runways} kifutó`))}</div></span>
             </button>`).join('');
 
         // előbeállítások
@@ -504,7 +528,14 @@
         $('rs-mode').value = r.settings.mode;
         $('rs-offset').value = r.settings.sectorOffset;
         $('rs-offset-field').style.display = r.settings.mode === 'sector' ? '' : 'none';
-        $('rs-mode-desc').textContent = Rules.MODES[r.settings.mode].desc;
+        const mode = Rules.MODES[r.settings.mode];
+        const apInfo = airportsCache.find((x) => x.icao === r.settings.airport);
+        let warn = '';
+        if (r.players.length > mode.maxPlayers) warn = `Ebben a módban legfeljebb ${mode.maxPlayers} fő játszhat – válassz másik módot.`;
+        else if (mode.needsCluster && !(apInfo && apInfo.cluster)) warn = 'Ehhez a módhoz MULTI jelzésű, többrepteres pályát válassz.';
+        else if (r.settings.mode === 'airports' && apInfo && r.players.length > apInfo.airports.length) warn = `Ezen a pályán csak ${apInfo.airports.length} reptér van.`;
+        $('rs-mode-desc').innerHTML = `${esc(mode.desc)}${warn ? `<div class="mode-warn">⚠ ${esc(warn)}</div>` : ''}`;
+        $('btn-start').disabled = !!warn;
         $('btn-start').hidden = !host;
         $('wait-host').hidden = host;
         const n = Rules.sectorCount(r.players);
@@ -513,6 +544,10 @@
             let sel = '';
             if (r.settings.mode === 'roles') {
                 sel = `<select data-pid="${p.id}" data-field="role" ${editable ? '' : 'disabled'}>${Object.entries(Rules.ROLES).map(([k, v]) => `<option value="${k}" ${p.role === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
+            } else if (r.settings.mode === 'airports') {
+                const ap = airportsCache.find((x) => x.icao === r.settings.airport);
+                const list = ap && ap.cluster ? ap.airports : [];
+                sel = `<select data-pid="${p.id}" data-field="airport" ${editable ? '' : 'disabled'}>${list.map((x, i) => `<option value="${i}" ${p.airport === i ? 'selected' : ''}>${x.icao} ${esc(x.name)}</option>`).join('')}</select>`;
             } else if (r.settings.mode === 'sector') {
                 sel = `<select data-pid="${p.id}" data-field="sector" ${editable ? '' : 'disabled'}>${Array.from({ length: Math.max(n, 6) }, (_, i) => `<option value="${i}" ${p.sector === i ? 'selected' : ''}>${i + 1}. szektor</option>`).join('')}</select>`;
             }
@@ -536,7 +571,7 @@
             soloPending = true;
             send({ t: 'create', name: getName(), settings: { mode: 'free' } });
         };
-        $('btn-create').onclick = () => send({ t: 'create', name: getName(), settings: { mode: 'roles' } });
+        $('btn-create').onclick = () => send({ t: 'create', name: getName(), settings: { mode: 'airports', airport: 'LONDON' } });
         $('btn-join').onclick = () => {
             const code = $('in-code').value.trim().toUpperCase();
             if (code.length !== 4) {
@@ -597,6 +632,7 @@
             const pid = Number(s.dataset.pid);
             const msg = { t: 'player', targetId: pid === state.me ? undefined : pid };
             if (s.dataset.field === 'role') msg.role = s.value;
+            else if (s.dataset.field === 'airport') msg.airport = Number(s.value);
             else msg.sector = Number(s.value);
             send(msg);
         };
@@ -895,6 +931,26 @@
                 [s.r * 0.62, 'rgba(210,180,60,0.25)', 'rgba(230,200,80,0.5)']
             ];
             if (s.core > 0) layers.push([s.core, 'rgba(220,60,70,0.45)', 'rgba(255,90,100,0.9)']);
+            if (s.hu) {
+                // hurrikán: forgó spirálkarok
+                ctx.save();
+                ctx.translate(sx, sy);
+                ctx.rotate(-now / 2500);
+                ctx.strokeStyle = 'rgba(255,120,130,0.55)';
+                ctx.lineWidth = 3;
+                for (let arm = 0; arm < 4; arm++) {
+                    ctx.beginPath();
+                    for (let t = 0; t <= 1; t += 0.04) {
+                        const ang = arm * Math.PI / 2 + t * Math.PI * 1.6;
+                        const rr = (s.core + (s.r - s.core) * t) * k;
+                        const px = Math.cos(ang) * rr;
+                        const py = Math.sin(ang) * rr;
+                        if (t) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+                    }
+                    ctx.stroke();
+                }
+                ctx.restore();
+            }
             for (const [r, fill, stroke] of layers) {
                 ctx.beginPath();
                 // kissé szabálytalan, „csapadékszerű” forma
@@ -915,7 +971,7 @@
             ctx.fillStyle = 'rgba(255,140,150,0.9)';
             ctx.font = '600 10px ui-monospace, monospace';
             ctx.textAlign = 'center';
-            ctx.fillText('ZIVATAR', sx, sy - s.r * k - 6);
+            ctx.fillText(s.hu ? 'HURRIKÁN' : 'ZIVATAR', sx, sy - s.r * k - 6);
             // sodródás iránya
             const ang = s.h * Math.PI / 180;
             const ax = sx + Math.sin(ang) * (s.r * k + 14);
@@ -1114,6 +1170,27 @@
     }
 
     // ---------- kapuk ----------
+    // többrepteres pályán a repterek neve, „Saját reptér” módban a gazda színével
+    function drawAirportLabels() {
+        if (!multiAirport()) return;
+        const r = state.room;
+        state.info.airports.forEach((ap, i) => {
+            const [x, y] = toScreen(ap.pos[0], ap.pos[1]);
+            const owner = r && r.settings.mode === 'airports' ? r.players.find((p) => p.airport === i) : null;
+            ctx.font = '600 12px ui-monospace, monospace';
+            ctx.textAlign = 'center';
+            const label = `${ap.icao} · ${ap.name}${owner ? ` · ${owner.name}` : ''}`;
+            const w = ctx.measureText(label).width + 12;
+            ctx.fillStyle = 'rgba(14,22,34,0.75)';
+            ctx.fillRect(x - w / 2, y + 26, w, 18);
+            ctx.strokeStyle = owner ? owner.color : 'rgba(201,212,227,0.35)';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(x - w / 2 + 0.5, y + 26.5, w - 1, 17);
+            ctx.fillStyle = owner ? owner.color : COLORS.text;
+            ctx.fillText(label, x, y + 39);
+        });
+    }
+
     function drawGates() {
         if (!state.info) return;
         for (const g of state.info.gates) {
@@ -1266,6 +1343,45 @@
                 ctx.stroke();
             }
 
+            if (a.k === 'mil') {
+                // vadászgép: kis zöld delta, rövid felirat, nincs adatblokk
+                ctx.save();
+                ctx.translate(sx, sy);
+                ctx.rotate(p.h * Math.PI / 180);
+                ctx.fillStyle = COLORS.mil;
+                ctx.beginPath();
+                ctx.moveTo(0, -8);
+                ctx.lineTo(6, 6);
+                ctx.lineTo(0, 3);
+                ctx.lineTo(-6, 6);
+                ctx.closePath();
+                ctx.fill();
+                ctx.restore();
+                ctx.fillStyle = COLORS.mil;
+                ctx.font = '10px ui-monospace, monospace';
+                ctx.textAlign = 'left';
+                ctx.fillText(a.cs, sx + 9, sy - 6);
+                ctx.globalAlpha = 1;
+                continue;
+            }
+            if (a.hj) {
+                // eltérített gép: villogó narancs kör és szaggatott vonal a célreptérig
+                const pulse = 0.5 + 0.5 * Math.sin(now / 140);
+                ctx.strokeStyle = `rgba(255,159,28,${0.55 + pulse * 0.45})`;
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.arc(sx, sy, 20 + pulse * 4, 0, Math.PI * 2);
+                ctx.stroke();
+                const tgt = state.info.airports[a.ap] || state.info.airports[0];
+                const [tx, ty] = toScreen(tgt.pos[0], tgt.pos[1]);
+                ctx.setLineDash([6, 6]);
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.moveTo(sx, sy);
+                ctx.lineTo(tx, ty);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
             if (a.sw) {
                 const pulse = 0.5 + 0.5 * Math.sin(now / 110);
                 ctx.strokeStyle = `rgba(255,77,94,${0.5 + pulse * 0.5})`;
@@ -1285,9 +1401,10 @@
             }
 
             // adatblokk
-            let line1 = `${a.cs} ${a.em != null ? 'VÉSZ' : KIND_LABEL[a.k]}`;
+            let line1 = `${a.cs} ${acBadge(a)}`;
+            if (multiAirport() && a.k !== 'mil' && a.k !== 'transit') line1 += ` ${apCode(a.ap)}`;
             if (a.k === 'arr' && a.rw != null) line1 += ` ${runwayLabel(a.rw)}`;
-            if (a.k !== 'arr') line1 += ` →${a.eg}`;
+            if ((a.k === 'dep' || a.k === 'transit') && a.eg) line1 += ` →${a.eg}`;
             let line2;
             if (alt) {
                 line2 = `${fl(a.al)}${a.ta > a.al + 50 ? '↑' : a.ta < a.al - 50 ? '↓' : ' '}${a.ta !== a.al ? fl(a.ta) : '   '} ${a.s}kt`;
@@ -1321,7 +1438,10 @@
             ctx.fillText(lines[0], bx + 6, by + 12);
             ctx.fillStyle = COLORS.text;
             ctx.fillText(lines[1], bx + 6, by + 25);
-            if (a.sw) {
+            if (a.hj) {
+                ctx.fillStyle = COLORS.hj;
+                ctx.fillText(a.sc ? 'ELTÉRÍTETT – VADÁSZOK ÚTON' : 'ELTÉRÍTETT – NYOMD: F', bx + 6, by + 40);
+            } else if (a.sw) {
                 ctx.fillStyle = COLORS.bad;
                 ctx.fillText('ZIVATAR! FORDÍTSD EL', bx + 6, by + 40);
             } else if (a.fg) {
@@ -1349,6 +1469,7 @@
             drawFogs(now);
             drawStorms(now);
             drawRunways();
+            drawAirportLabels();
             drawGates();
             drawAircraft(now);
         }
@@ -1674,6 +1795,11 @@
         if (key === 'h') { $('app').classList.toggle('hide-top'); setTimeout(resize, 0); return; }
         if (key === 'escape') { select(null); $('help').hidden = true; return; }
         if (key === '?') { $('help').hidden = !$('help').hidden; return; }
+        if (key === 'f' && !(sel && sel.hj)) {
+            const hj = state.snap && state.snap.aircraft.find((x) => x.hj && !x.sc);
+            if (hj) cmd('scramble', { id: hj.id });
+            return;
+        }
         if (!sel) return;
         if (/^[1-9]$/.test(key)) {
             const i = Number(key) - 1;
@@ -1683,6 +1809,7 @@
         if (key === 'x') cmd('takeoff', { id: sel.id });
         else if (key === 'r') cmd('hold', { id: sel.id });
         else if (key === 'g') cmd('goAround', { id: sel.id });
+        else if (key === 'f') cmd('scramble', { id: sel.id });
         else if (key === 'w') cmd('speed', e.shiftKey ? { id: sel.id, to: 'max' } : { id: sel.id, delta: 10 });
         else if (key === 's') cmd('speed', e.shiftKey ? { id: sel.id, to: 'min' } : { id: sel.id, delta: -10 });
         else if (key === 'c' || key === 'arrowup') {
@@ -1711,6 +1838,7 @@
             else if (act === 'takeoff') cmd('takeoff', { id });
             else if (act === 'hold') cmd('hold', { id });
             else if (act === 'goaround') cmd('goAround', { id });
+            else if (act === 'scramble') cmd('scramble', { id });
             else if (act === 'alt') cmd('altitude', { id, delta: Number(b.dataset.d) });
             else if (act === 'spd') cmd('speed', { id, delta: Number(b.dataset.d) });
             else if (act === 'clearroute') {

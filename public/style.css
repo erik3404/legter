@@ -365,3 +365,10 @@ table.keys td:first-child { white-space: nowrap; }
     .tb-stats .stat:not(.score-c):not(.bad-c):not(.arr-c) { display: none; }
     .seg button[data-speed="0.5"], .seg button[data-speed="1.5"] { display: none; }
 }
+
+#toast.hj { border-color: #ff9f1c; }
+#toast.hj b { color: #ff9f1c; }
+.btn.danger { background: #ff9f1c; border-color: #ff9f1c; color: #2a1600; font-weight: 600; margin-top: 6px; }
+.ac-row.k-mil { border-left-color: #7bd88f; opacity: .8; }
+.ap-tag { display: inline-block; font: 10px var(--mono); color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: middle; }
+.mode-warn { color: var(--tr); font-size: 12px; margin: 0 0 8px; }

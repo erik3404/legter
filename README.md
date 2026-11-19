@@ -38,59 +38,28 @@ Bármilyen más Node-tárhelyen is fut: a `PORT` környezeti változón figyel, 
 
 ## Multi módok
 
-- **Szabad**: mindenki minden gépet irányíthat, a pontszám közös.
-- **Szektoros**: a légteret szeletekre osztjuk, mindenki a saját szeletét kezeli. A reptér körüli torony-zóna közös,
-  és ha egy gép átrepül a szomszéd szektorba, automatikusan oda kerül.
-- **Repteres (Fel/Le)**: szerepeket osztotok ki. Az *induló* a felszállókat, az *érkező* a leszállókat irányítja,
-  az átrepülőket mindenki.
+A szobagazda a lobbiban választ módot:
 
-A szobagazda választja a repteret, a módot és a forgalmat, és ő indítja a műszakot. A többiek a 4 betűs
-szobakóddal vagy a megosztott linkkel lépnek be.
+- **Saját reptér (2–3 fő)**: többrepteres pálya (London: Heathrow, Gatwick, London City · New York: JFK, Newark ·
+  Washington: Dulles, Reagan National · Tokió: Haneda, Narita). Ahányan vagytok (legfeljebb 3), annyi reptér él,
+  és mindenki csak a saját repterének gépeit irányítja.
+- **Leszállás + felszállás (2 fő)**: egy reptér, az egyik játékos a leszállókért, a másik a felszállókért felel.
+- **Szabad**: mindenki minden gépet irányíthat (legfeljebb 6 fő).
+- **Szektoros**: a légteret szeletekre osztjuk, mindenki a saját szeletét kezeli (legfeljebb 6 fő).
 
-## Műszak-beállítások
+A többiek a 4 betűs szobakóddal vagy a megosztott linkkel lépnek be.
 
-Indítás előtt a szobagazda kiválasztja a repteret és a szabályokat. A **Klasszikus** és a **Nehéz** előre beállított
-csomag, bármelyik kapcsoló átállításával **Egyéni** lesz. Minden szabálynak saját pontszorzója van:
+## Események
 
-| Szabály | Ki | Be |
-| --- | --- | --- |
-| Magasság (süllyesztés, emelés, kilépési szint) | ×1.00 | ×1.20 |
-| Indulók és átrepülők útvonala kézzel | ×1.00 | ×1.20 |
-| Szünetben a parancsok várnak | ×1.00 | ×1.05 |
-| Véletlen kapuk (4–6) | ×1.00 | ×1.10 |
-| Kifutó-ellenőrzések (ideiglenes lezárás) | ×0.90 | ×1.00 |
-| Vészhelyzetek (6 percen belül le kell szállni) | ×0.95 | ×1.00 |
-| Zivatarok (a piros mag incidens) | ×0.90 | ×1.00 |
-| Minden útvonal látszik | ×1.00 | ×0.60 |
+- **Zivatar**: zöld és sárga rész átrepülhető, a piros magba repülés a műszak végét jelenti. 1% eséllyel hurrikán lesz belőle.
+- **Köd**: a benne repülő gép egyenesen halad, és amíg ki nem ér, nem irányítható.
+- **Vészhelyzet / kényszerleszállás**: 6 percen belül le kell szállnia. Kényszerleszállásnál amíg le nem száll,
+  a repterén senki más nem szállhat le.
+- **Eltérítés**: egy gép nem válaszol, és egy reptér felé fordul. Az **F** billentyűvel vadászgépeket indíthatsz:
+  ha elfogják, a gép kényszerleszállást hajt végre (+25 pont). Ha eléri a repteret, vége a műszaknak.
+- **Kifutó-ellenőrzés**: egy kifutót egy perc figyelmeztetés után néhány percre lezárnak.
 
-A forgalom 50–150% lehet (×0.50–×1.50). Van gyakorló mód (csak érkezők, indulók vagy átrepülők), és kétféle kezdés.
-
-## Hangjelzések
-
-- felfelé lépő csengő + felugró értesítés: új induló vár (40 mp-enként emlékeztet, ha sokáig vár)
-- rövid pitty: érkező lép be · két mély pitty: átrepülő
-- gyors dupla sípolás: két gép túl közel
-- ding: sikeres leszállás vagy kilépés · mély zúgás: incidens · sziréna: vészhelyzet
-
-Csak azokról a gépekről szól, amelyeket te irányíthatsz. A 🔊 gombbal halkítható vagy kikapcsolható.
-
-## Irányítás
-
-| Billentyű | Funkció |
-| --- | --- |
-| Kattintás a gépre | kijelölés |
-| Kattintás üres helyre | útpont (a legkisebb kerülőt jelentő helyre kerül) |
-| Kattintás / húzás útponton | törlés / áthelyezés |
-| Shift + kattintás | útvonal cseréje |
-| Shift + kattintás a kifutó számán | üzemi irány megfordítása |
-| 1–9 | kifutó kiválasztása |
-| X | felszállás |
-| R | várakozó körözés |
-| G | átstartolás |
-| W / S | sebesség ±10 csomó (Shift: max/min) |
-| C / D, ↑ / ↓ | magasság ±1000 láb (Shift: max/min), ha a Magasság szabály be van kapcsolva |
-| Tab, N | következő induló / légtérben lévő gép |
-| Szóköz | szünet (szobagazda) |
+Telefonon és tableten is játszható: koppintás, húzás, kétujjas nagyítás.
 
 ## Felépítés
 
