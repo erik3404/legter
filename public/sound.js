@@ -116,6 +116,19 @@
             tone({ freq: 90, freqEnd: 220, type: 'sawtooth', dur: 1.2, gain: 0.45, filter: 700 });
             tone({ freq: 220, freqEnd: 90, type: 'sawtooth', start: 1.2, dur: 1.2, gain: 0.45, filter: 700 });
         },
+        // VIP: ünnepélyes fanfár (dúr hármashangzat)
+        vip() {
+            [523, 659, 784, 1046].forEach((f, i) => tone({ freq: f, type: 'triangle', start: i * 0.14, dur: 0.35, gain: 0.4 }));
+        },
+        // átadás: halk, kétirányú „pling-plang”
+        handoff() {
+            tone({ freq: 740, type: 'sine', dur: 0.12, gain: 0.35 });
+            tone({ freq: 988, type: 'sine', start: 0.1, dur: 0.18, gain: 0.35 });
+        },
+        // értékelés: csilingelő, felfelé futó arpeggio
+        review() {
+            [784, 988, 1175, 1568].forEach((f, i) => tone({ freq: f, type: 'sine', start: i * 0.09, dur: 0.3, gain: 0.3 }));
+        },
         // figyelmeztetés (zivatar, kifutózárás): lefelé lépő kettős hang
         warn() {
             tone({ freq: 523, type: 'triangle', dur: 0.16, gain: 0.4 });

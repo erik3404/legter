@@ -7,7 +7,7 @@
     const KIND_LABEL = { arr: 'ÉRK', dep: 'IND', transit: 'ÁTR', mil: 'VAD' };
     const KIND_NAME = { arr: 'Érkező', dep: 'Induló', transit: 'Átrepülő', mil: 'Katonai' };
     const COLORS = {
-        arr: '#ff6f7d', dep: '#5fa8ff', transit: '#f5c451', em: '#c58cff', bad: '#ff4d5e', mil: '#7bd88f', hj: '#ff9f1c',
+        arr: '#ff6f7d', dep: '#5fa8ff', transit: '#f5c451', em: '#c58cff', bad: '#ff4d5e', mil: '#7bd88f', hj: '#ff9f1c', vip: '#ffd84d', pc: '#f5c451',
         grid: 'rgba(120,150,190,0.08)', border: 'rgba(79,209,197,0.35)',
         text: '#c9d4e3', muted: '#6f7f96', accent: '#4fd1c5'
     };
@@ -104,12 +104,18 @@
                 }
                 checkConflicts();
                 checkDepartures();
+                checkReview();
+                renderPerks();
+                checkOwnership();
                 break;
             case 'log':
                 addLog(m.kind, m.text, null, m.by, m.color);
                 break;
             case 'cmdResult':
                 if (!m.ok && m.text) addLog('warn', m.text);
+                break;
+            case 'handoffReq':
+                showHandoffRequest(m);
                 break;
             case 'queued':
                 $('queued').textContent = m.count ? `${m.count} parancs vár a folytatásra` : '';
@@ -171,8 +177,10 @@
         return rw ? rw.names[rwState(idx).e] : '–';
     };
     const fl = (alt) => String(Math.round(alt / 100)).padStart(3, '0');
-    const acColor = (a) => (a.hj ? COLORS.hj : a.em != null ? COLORS.em : COLORS[a.k]);
-    const acBadge = (a) => (a.hj ? 'ELTÉR' : a.pr ? 'KÉNYSZ' : a.em != null ? 'VÉSZ' : KIND_LABEL[a.k]);
+    const acColor = (a) => (a.hj ? COLORS.hj : a.vp ? COLORS.vip : a.em != null ? COLORS.em : COLORS[a.k]);
+    const acBadge = (a) => (a.hj ? 'ELTÉR' : a.vp ? 'VIP' : a.pr ? 'KÉNYSZ' : a.em != null ? 'VÉSZ' : KIND_LABEL[a.k]);
+    const hasPerk = (k) => !!(state.snap && state.snap.perks && state.snap.perks.includes(k));
+    const roleSet = () => (state.room ? Rules.ROLE_SETS[Rules.MODES[state.room.settings.mode].roles] : null);
     const multiAirport = () => state.info && state.info.airports && state.info.airports.length > 1;
     const apCode = (i) => (state.info && state.info.airports[i] ? state.info.airports[i].icao : '');
 
@@ -197,7 +205,7 @@
 
     // csak azokról a gépekről szólunk, amelyeket a játékos irányíthat
     function relevant(ev) {
-        if (['good', 'incident', 'warn', 'hijack', 'hurricane'].includes(ev.sound)) return true;
+        if (['good', 'incident', 'warn', 'hijack', 'hurricane', 'vip', 'review'].includes(ev.sound)) return true;
         if (ev.sound === 'depReady') return canControl({ k: 'dep', st: 'ground', x: 0, y: 0 });
         const a = ev.aircraftId != null ? state.acById.get(ev.aircraftId) : null;
         return !a || canControl(a);
@@ -238,8 +246,81 @@
                 }
                 $('toast').hidden = true;
             };
+        } else if (ev.sound === 'vip') {
+            const a = state.acById.get(ev.aircraftId);
+            showToast(`<b>${a ? a.cs : 'VIP'}</b> államfői gép érkezik! Tartsd tisztán a kifutókat, és indítsd a Gripeneket – koppints ide vagy <kbd>F</kbd>.`, 'vip', ev.aircraftId);
+            $('toast').onclick = () => {
+                if (a) {
+                    cmd('scramble', { id: a.id });
+                    select(a.id);
+                }
+                $('toast').hidden = true;
+            };
         } else if (ev.sound === 'hurricane') {
             showToast('<b>HURRIKÁN!</b> Tartsd távol a gépeket a piros magjától.', 'em', null);
+        }
+    }
+
+    // értékelés: 3 fejlesztésből lehet választani (multiban bárki választhat a csapatnak)
+    let lastReviewKey = '';
+    function checkReview() {
+        const rv = state.snap && state.snap.review;
+        const box = $('review');
+        const key = rv ? rv.options.join(',') : '';
+        if (key === lastReviewKey) return;
+        lastReviewKey = key;
+        if (!rv) {
+            box.hidden = true;
+            return;
+        }
+        $('review-cards').innerHTML = rv.options.map((k) => `<button class="perk-card" data-perk="${k}">
+            <b>${esc(Rules.PERKS[k].label)}</b><span>${esc(Rules.PERKS[k].desc)}</span></button>`).join('');
+        box.hidden = false;
+    }
+
+    function renderPerks() {
+        const s = state.snap;
+        if (!s) return;
+        const chips = (s.perks || []).map((k) => `<span class="perk-chip" title="${esc(Rules.PERKS[k].desc)}">${esc(Rules.PERKS[k].label)}</span>`).join('');
+        const next = s.nextReview ? `<span class="hint">Következő értékelés: ${s.nextReview.moves} gép vagy ${fmtTime(s.nextReview.seconds)}</span>` : '';
+        const html = `${chips}${next}`;
+        if ($('perks-list').innerHTML !== html) $('perks-list').innerHTML = html;
+    }
+
+    function showHandoffRequest(m) {
+        const box = $('handoff-req');
+        $('handoff-text').innerHTML = m.give
+            ? `<b style="color:${m.color}">${esc(m.from)}</b> át szeretné adni neked: <b>${esc(m.cs)}</b>`
+            : `<b style="color:${m.color}">${esc(m.from)}</b> átvenné tőled: <b>${esc(m.cs)}</b>`;
+        box.hidden = false;
+        Sound.play('handoff');
+        const close = (accept) => {
+            send({ t: 'handoffReply', reqId: m.reqId, accept });
+            box.hidden = true;
+            clearTimeout(alerts.handoffTimer);
+        };
+        $('handoff-yes').onclick = () => close(true);
+        $('handoff-no').onclick = () => close(false);
+        clearTimeout(alerts.handoffTimer);
+        alerts.handoffTimer = setTimeout(() => { box.hidden = true; }, 25000);
+    }
+
+    // automatikus átadásnál (pl. torony-zóna) szól, ha egy gép hozzád került
+    const ownership = new Map();
+    function checkOwnership() {
+        if (!state.snap || !state.room || state.room.players.length < 2 || state.room.settings.mode === 'free') return;
+        let gained = null;
+        for (const a of state.snap.aircraft) {
+            if (a.k === 'mil') continue;
+            const mine = canControl(a);
+            const before = ownership.get(a.id);
+            if (before === false && mine) gained = a;
+            ownership.set(a.id, mine);
+        }
+        for (const id of ownership.keys()) if (!state.acById.has(id)) ownership.delete(id);
+        if (gained) {
+            Sound.play('handoff');
+            addLog('info', `${gained.cs} átkerült hozzád.`);
         }
     }
 
@@ -330,7 +411,9 @@
         const locked = !canControl(a);
         let right;
         if (ground) {
-            right = `<div class="timer ${a.gf < 60 ? 'low' : ''}">FÖLD ${a.gf}s</div>`;
+            right = `<div class="timer ${a.gf < 60 ? 'low' : ''}">${a.q ? 'SORBAN · ' : ''}FÖLD ${a.gf}s</div>`;
+        } else if (a.sq) {
+            right = `<div class="timer">#${a.sq} · ${fmtTime(a.eta)}</div>`;
         } else if (a.fg) {
             right = '<div class="timer">KÖDBEN</div>';
         } else if (a.em != null) {
@@ -352,6 +435,8 @@
     // ---------- kijelölt gép ----------
     function renderSelected() {
         const card = $('sel-card');
+        const focused = document.activeElement;
+        if (focused && card.contains(focused) && (focused.tagName === 'INPUT' || focused.tagName === 'SELECT')) return;
         const a = state.selected != null ? state.acById.get(state.selected) : null;
         if (!a || !state.info) {
             if (!card.querySelector('.empty-sel')) {
@@ -385,7 +470,9 @@
                     <button class="btn" data-act="alt" data-d="1000">▲ 1000<kbd>C</kbd></button>` : '';
         let actions = '';
         if (a.st === 'ground') {
-            actions = `<div class="btn-row">${rwButtons}</div><div class="btn-row"><button class="btn primary" data-act="takeoff">Felszállás<kbd>X</kbd></button></div>`;
+            const tlabel = a.q ? 'Kivétel a sorból' : hasPerk('takeoffQueue') ? 'Felszállás / sorba' : 'Felszállás';
+            actions = `<div class="btn-row">${rwButtons}</div><div class="btn-row"><button class="btn primary" data-act="takeoff">${tlabel}<kbd>X</kbd></button>
+                ${a.q ? '<span class="hint">Sorban áll: magától felszáll, amint a kifutó szabad.</span>' : ''}</div>`;
         } else if (a.st === 'takeoff') {
             actions = alt ? `<div class="btn-row">${altButtons}</div>` : '';
         } else if (a.st === 'airborne' || a.st === 'final') {
@@ -395,6 +482,8 @@
                     <button class="btn" data-act="spd" data-d="-10">− 10 kt<kbd>S</kbd></button>
                     <button class="btn" data-act="spd" data-d="10">+ 10 kt<kbd>W</kbd></button>
                 </div>
+                ${hasPerk('exactSpeed') && a.st === 'airborne' ? `<div class="btn-row"><input id="exact-speed" type="number" class="num-input" min="${Math.round(a.ts * 0.6)}" max="${a.ts * 2}" value="${a.ts}" step="5"><button class="btn" data-act="exactspd">Sebesség beállítása</button></div>` : ''}
+                ${hasPerk('flexExit') && a.st === 'airborne' && (a.k === 'dep' || a.k === 'transit') ? `<div class="btn-row"><span class="hint">Kijárat${state.snap.flexIn ? ` (${state.snap.flexIn} mp múlva)` : ''}:</span>${state.info.gates.map((g) => `<button class="btn gate-btn ${g.letter === a.eg ? 'active' : ''}" data-act="exit" data-gate="${g.letter}" ${state.snap.flexIn ? 'disabled' : ''}>${g.letter}</button>`).join('')}</div>` : ''}
                 <div class="btn-row">
                     <button class="btn" data-act="hold">${a.hd ? 'Körözés vége' : 'Körözés'}<kbd>R</kbd></button>
                     ${a.st === 'final' ? '<button class="btn" data-act="goaround">Átstartolás<kbd>G</kbd></button>' : ''}
@@ -406,11 +495,29 @@
             const owners = Rules.ownersOf(a, state.room.settings, state.room.players).map((p) => p.name);
             ownerNote = `<div class="owner-note">Nem a te géped${owners.length ? ` – ${esc(owners.join(', '))} irányítja` : ''}.</div>`;
         }
+        // átadás / átvétel (csak megosztott irányítású multiban)
+        const room = state.room;
+        const shared = room && room.players.length > 1 && room.settings.mode !== 'free' && a.k !== 'mil' && !a.hj;
+        if (shared) {
+            if (!locked) {
+                const others = room.players.filter((p) => p.id !== state.me);
+                ownerNote += `<div class="btn-row handoff-row"><span class="hint">Átadás:</span>
+                    <select id="handoff-to">${others.map((p) => `<option value="${p.id}" ${state.handoffTo === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+                    <button class="btn" data-act="handoff">Átadom neki</button></div>`;
+            } else {
+                ownerNote += '<div class="btn-row handoff-row"><button class="btn" data-act="handoff">Átvétel kérése</button></div>';
+            }
+        }
         let emBanner = a.em != null ? `<div class="em-banner">${a.pr ? 'KÉNYSZERLESZÁLLÁS' : 'VÉSZHELYZET'} – még ${fmtTime(a.em)} a leszállásig${a.pr ? '. Amíg le nem száll, a repterén senki más nem szállhat le.' : ''}</div>` : '';
         if (a.hj) {
             emBanner += `<div class="storm-banner">ELTÉRÍTETT GÉP – nem válaszol, ${esc(apCode(a.ap) || 'a reptér')} felé tart.
                 ${a.sc ? 'A vadászgépek úton vannak.' : '<br><button class="btn danger" data-act="scramble">Vadászgépek indítása<kbd>F</kbd></button>'}</div>`;
         }
+        if (a.vp) {
+            emBanner += `<div class="vip-banner">VIP (államfői) GÉP – amíg le nem száll, ${esc(apCode(a.ap) || 'a reptér')} kifutói zárva, és senki nem repülhet a közelébe.
+                ${a.sc ? 'A Gripenek kísérik.' : a.ed != null ? `<br><button class="btn vip" data-act="scramble">Gripenek indítása (${a.ed} mp)<kbd>F</kbd></button>` : ' Kíséret nélkül érkezett.'}</div>`;
+        }
+        if (a.sq) emBanner += `<div class="seq-banner">Leszállási sorrend: #${a.sq} · földet ér ${fmtTime(a.eta)} múlva${a.gp != null ? ` · ${a.gp} mp az előző mögött` : ''}</div>`;
         if (a.fg) emBanner += '<div class="fog-banner">KÖDBEN – a pilóta nem tudja, hol jár. Egyenesen repül tovább, és amíg ki nem ér, nem irányítható.</div>';
         if (a.sw) emBanner += '<div class="storm-banner">ZIVATAR! A gép a piros mag felé tart – fordítsd el, különben vége a műszaknak.</div>';
         card.innerHTML = `
@@ -431,7 +538,9 @@
     // ---------- játékosok ----------
     function playerRoleText(p) {
         const s = state.room.settings;
-        if (s.mode === 'roles') return Rules.ROLES[p.role] || '';
+        const set = Rules.ROLE_SETS[Rules.MODES[s.mode].roles];
+        if (set) return set[p.role] || '';
+        if (s.mode === 'airports') return state.info && state.info.airports[p.airport] ? state.info.airports[p.airport].icao : '';
         if (s.mode === 'sector') return `${p.sector + 1}. szektor`;
         return '';
     }
@@ -534,6 +643,7 @@
         if (r.players.length > mode.maxPlayers) warn = `Ebben a módban legfeljebb ${mode.maxPlayers} fő játszhat – válassz másik módot.`;
         else if (mode.needsCluster && !(apInfo && apInfo.cluster)) warn = 'Ehhez a módhoz MULTI jelzésű, többrepteres pályát válassz.';
         else if (r.settings.mode === 'airports' && apInfo && r.players.length > apInfo.airports.length) warn = `Ezen a pályán csak ${apInfo.airports.length} reptér van.`;
+        else if (Rules.roleProblems(r.settings.mode, r.players)) warn = `Posztok: ${Rules.roleProblems(r.settings.mode, r.players)}`;
         $('rs-mode-desc').innerHTML = `${esc(mode.desc)}${warn ? `<div class="mode-warn">⚠ ${esc(warn)}</div>` : ''}`;
         $('btn-start').disabled = !!warn;
         $('btn-start').hidden = !host;
@@ -542,8 +652,9 @@
         $('room-players').innerHTML = r.players.map((p) => {
             const editable = host || p.id === state.me;
             let sel = '';
-            if (r.settings.mode === 'roles') {
-                sel = `<select data-pid="${p.id}" data-field="role" ${editable ? '' : 'disabled'}>${Object.entries(Rules.ROLES).map(([k, v]) => `<option value="${k}" ${p.role === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
+            const set = Rules.ROLE_SETS[Rules.MODES[r.settings.mode].roles];
+            if (set) {
+                sel = `<select data-pid="${p.id}" data-field="role" ${editable ? '' : 'disabled'}>${Object.entries(set).map(([k, v]) => `<option value="${k}" ${p.role === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
             } else if (r.settings.mode === 'airports') {
                 const ap = airportsCache.find((x) => x.icao === r.settings.airport);
                 const list = ap && ap.cluster ? ap.airports : [];
@@ -1191,6 +1302,30 @@
         });
     }
 
+    // „Korábbi átvétel”: a hamarosan belépő gépek jelzése a kapunál
+    function drawIncoming(now) {
+        if (!state.snap || !state.snap.incoming) return;
+        for (const inc of state.snap.incoming) {
+            const g = state.info.gates.find((x) => x.letter === inc.g);
+            if (!g) continue;
+            let [sx, sy] = toScreen(...g.pos);
+            sx = Math.max(20, Math.min(W - 20, sx));
+            sy = Math.max(20, Math.min(H - 20, sy));
+            const pulse = 0.5 + 0.5 * Math.sin(now / 150);
+            ctx.strokeStyle = COLORS[inc.k];
+            ctx.globalAlpha = 0.5 + pulse * 0.5;
+            ctx.lineWidth = 3;
+            ctx.beginPath();
+            ctx.arc(sx, sy, 24, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+            ctx.fillStyle = COLORS[inc.k];
+            ctx.font = '600 11px ui-monospace, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText(`${KIND_LABEL[inc.k]} ${inc.t}s`, sx, sy - 30 < 10 ? sy + 40 : sy - 30);
+        }
+    }
+
     function drawGates() {
         if (!state.info) return;
         for (const g of state.info.gates) {
@@ -1308,6 +1443,22 @@
             });
             ctx.globalAlpha = baseAlpha;
 
+            if (a.pc && !a.cf) {
+                ctx.strokeStyle = COLORS.pc;
+                ctx.setLineDash([3, 4]);
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(sx, sy, Math.max(16, 1.5 * k), 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+            if (a.vp) {
+                ctx.strokeStyle = COLORS.vip;
+                ctx.lineWidth = 1.5;
+                ctx.beginPath();
+                ctx.arc(sx, sy, Math.max(14, 1.5 * k), 0, Math.PI * 2);
+                ctx.stroke();
+            }
             if (a.cf) {
                 const pulse = 0.5 + 0.5 * Math.sin(now / 160);
                 ctx.strokeStyle = COLORS.bad;
@@ -1441,6 +1592,12 @@
             if (a.hj) {
                 ctx.fillStyle = COLORS.hj;
                 ctx.fillText(a.sc ? 'ELTÉRÍTETT – VADÁSZOK ÚTON' : 'ELTÉRÍTETT – NYOMD: F', bx + 6, by + 40);
+            } else if (a.vp) {
+                ctx.fillStyle = COLORS.vip;
+                ctx.fillText(a.sc ? 'VIP – GRIPEN KÍSÉRET' : a.ed != null ? `VIP – KÍSÉRET: ${a.ed}s (F)` : 'VIP – KÍSÉRET NÉLKÜL', bx + 6, by + 40);
+            } else if (a.sq) {
+                ctx.fillStyle = COLORS.muted;
+                ctx.fillText(`#${a.sq} ${fmtTime(a.eta)}${a.gp != null ? ` +${a.gp}s` : ''}`, bx + 6, by + 40);
             } else if (a.sw) {
                 ctx.fillStyle = COLORS.bad;
                 ctx.fillText('ZIVATAR! FORDÍTSD EL', bx + 6, by + 40);
@@ -1471,6 +1628,7 @@
             drawRunways();
             drawAirportLabels();
             drawGates();
+            drawIncoming(now);
             drawAircraft(now);
         }
         if (state.room && state.room.paused) {
@@ -1795,8 +1953,8 @@
         if (key === 'h') { $('app').classList.toggle('hide-top'); setTimeout(resize, 0); return; }
         if (key === 'escape') { select(null); $('help').hidden = true; return; }
         if (key === '?') { $('help').hidden = !$('help').hidden; return; }
-        if (key === 'f' && !(sel && sel.hj)) {
-            const hj = state.snap && state.snap.aircraft.find((x) => x.hj && !x.sc);
+        if (key === 'f' && !(sel && (sel.hj || sel.vp))) {
+            const hj = state.snap && state.snap.aircraft.find((x) => (x.hj || (x.vp && x.ed != null)) && !x.sc);
             if (hj) cmd('scramble', { id: hj.id });
             return;
         }
@@ -1829,8 +1987,15 @@
         };
         $('dep-list').onclick = onRowClick;
         $('air-list').onclick = onRowClick;
-        $('sel-card').onclick = (e) => {
+        // a kártya ötször újrarajzolódik másodpercenként: a választást megjegyezzük,
+        // a gombok pedig már lenyomáskor reagálnak, hogy egy kattintás se vesszen el
+        $('sel-card').addEventListener('change', (e) => {
+            if (e.target.id === 'handoff-to') state.handoffTo = Number(e.target.value);
+        });
+        $('sel-card').onpointerdown = (e) => {
+            if (e.button !== 0) return;
             const b = e.target.closest('button[data-act]');
+            if (b) e.preventDefault();
             if (!b || state.selected == null) return;
             const id = state.selected;
             const act = b.dataset.act;
@@ -1839,6 +2004,13 @@
             else if (act === 'hold') cmd('hold', { id });
             else if (act === 'goaround') cmd('goAround', { id });
             else if (act === 'scramble') cmd('scramble', { id });
+            else if (act === 'exactspd') cmd('speed', { id, value: Number($('exact-speed').value) });
+            else if (act === 'exit') cmd('changeExit', { id, gate: b.dataset.gate });
+            else if (act === 'handoff') {
+                const toSel = $('handoff-to');
+                send({ t: 'handoff', id, to: toSel ? Number(toSel.value) : undefined });
+                addLog('info', 'Kérés elküldve, várjuk a választ…');
+            }
             else if (act === 'alt') cmd('altitude', { id, delta: Number(b.dataset.d) });
             else if (act === 'spd') cmd('speed', { id, delta: Number(b.dataset.d) });
             else if (act === 'clearroute') {
@@ -1862,6 +2034,10 @@
         };
         $('btn-help').onclick = () => { $('help').hidden = false; };
         $('btn-fit').onclick = () => { state.view = { zoom: 1, panX: 0, panY: 0 }; };
+        $('review-cards').onclick = (e) => {
+            const b = e.target.closest('[data-perk]');
+            if (b) cmd('choosePerk', { perk: b.dataset.perk });
+        };
         $('btn-end-mobile').onclick = () => $('btn-end').click();
         $('help-close').onclick = () => { $('help').hidden = true; };
         $('help').onclick = (e) => { if (e.target.id === 'help') $('help').hidden = true; };

@@ -89,6 +89,29 @@ function freeColor(room) {
     return PLAYER_COLORS.find((c) => !used.has(c)) || PLAYER_COLORS[room.players.size % PLAYER_COLORS.length];
 }
 
+// posztok újraosztása módváltáskor vagy létszámváltozáskor
+function reassignRoles(room) {
+    const set = Rules.MODES[room.settings.mode].roles;
+    if (!set) return;
+    const players = [...room.players.values()];
+    const defaults = Rules.DEFAULT_ROLES[set][Math.min(3, Math.max(1, players.length))] || [];
+    players.forEach((p, i) => { p.role = defaults[i] || 'all'; });
+}
+
+function assignDefaultRole(room, player) {
+    const set = Rules.MODES[room.settings.mode].roles;
+    if (!set) {
+        player.role = 'all';
+        return;
+    }
+    const others = [...room.players.values()].filter((p) => p !== player);
+    const defaults = Rules.DEFAULT_ROLES[set][Math.min(3, others.length + 1)] || [];
+    // két főnél az első játékos az összevont posztra vált, hogy minden poszt foglalt legyen
+    if (others.length === 1 && Rules.DEFAULT_ROLES[set][2]) others[0].role = Rules.DEFAULT_ROLES[set][2][0];
+    if (others.length === 2 && Rules.DEFAULT_ROLES[set][3]) others.forEach((p, i) => { p.role = Rules.DEFAULT_ROLES[set][3][i]; });
+    player.role = defaults.find((r) => !others.some((p) => p.role === r)) || defaults[defaults.length - 1] || 'all';
+}
+
 function freeAirport(room) {
     const used = new Set([...room.players.values()].map((p) => p.airport));
     for (let i = 0; i < 3; i++) if (!used.has(i)) return i;
@@ -116,9 +139,8 @@ function addPlayer(room, ws, name) {
         airport: freeAirport(room),
         selected: null
     };
-    // a repteres módban az új játékos a még üres szerepet kapja
-    const roles = [...room.players.values()].map((p) => p.role);
-    player.role = ['arr', 'dep'].find((r) => !roles.includes(r)) || 'all';
+    // szerepalapú módban az új játékos a következő szabad posztot kapja
+    assignDefaultRole(room, player);
     room.players.set(player.id, player);
     if (!room.hostId) room.hostId = player.id;
     ws.roomCode = room.code;
@@ -141,6 +163,7 @@ function removePlayer(ws) {
         return;
     }
     if (room.hostId === ws.playerId) room.hostId = room.players.keys().next().value;
+    if (!room.sim) reassignRoles(room);
     if (player) broadcast(room, { t: 'log', kind: 'info', text: `${player.name} kilépett.` });
     sendRoom(room);
 }
@@ -171,6 +194,8 @@ function checkStart(room) {
     const mode = Rules.MODES[room.settings.mode];
     const n = room.players.size;
     if (n > mode.maxPlayers) return `A(z) „${mode.label}” módban legfeljebb ${mode.maxPlayers} fő játszhat.`;
+    const roleIssue = Rules.roleProblems(room.settings.mode, publicPlayers(room));
+    if (roleIssue) return `Posztok: ${roleIssue}`;
     if (mode.needsCluster && !AIRPORTS[room.settings.airport].cluster) {
         return 'A „Saját reptér” módhoz többrepteres pályát válassz (London, New York, Washington vagy Tokió).';
     }
@@ -200,6 +225,11 @@ function startGame(room) {
             room.sim.forceForcedLanding = true;
             room.sim.timers.hijack = 6;
             room.sim.timers.emergency = 9;
+        }
+        if (process.env.LEGTER_TEST_WEATHER === 'vip') {
+            room.sim.timers.vip = 4;
+            room.sim.timers.hijack = 1e9;
+            room.sim.nextReviewTime = 8;
         }
         if (process.env.LEGTER_TEST_WEATHER === 'gameover') {
             const sim = room.sim;
@@ -245,8 +275,9 @@ function runCommand(room, player, cmd, reply) {
     if (ok && text) broadcast(room, { t: 'log', kind: 'radio', text, by: player.name, color: player.color });
 }
 
-function compactForRules(ac) {
-    return { k: ac.kind, st: ac.state, x: ac.x, y: ac.y, ap: ac.home };
+// a jogosultsághoz szükséges adatok ugyanúgy, ahogy a kliens a pillanatképből látja
+function compactForRules(room, ac) {
+    return room.sim.ruleView(ac);
 }
 
 function handle(ws, msg) {
@@ -281,7 +312,9 @@ function handle(ws, msg) {
             if (!room.sim && AIRPORTS[s.airport]) room.settings.airport = s.airport;
             if (!room.sim && s.shift) room.settings.shift = Rules.normalizeShift(s.shift);
             if (Rules.MODES[s.mode]) {
+                const changed = room.settings.mode !== s.mode;
                 room.settings.mode = s.mode;
+                if (changed) reassignRoles(room);
                 // a „Saját reptér” módhoz többrepteres pálya kell
                 if (Rules.MODES[s.mode].needsCluster && !AIRPORTS[room.settings.airport].cluster && !room.sim) room.settings.airport = 'LONDON';
             }
@@ -292,7 +325,7 @@ function handle(ws, msg) {
         case 'player': {
             const target = msg.targetId && isHost ? room.players.get(msg.targetId) : player;
             if (!target) return;
-            if (Rules.ROLES[msg.role]) target.role = msg.role;
+            if (Rules.ROLES[msg.role] || Rules.POSITIONS[msg.role]) target.role = msg.role;
             if (Number.isInteger(msg.sector) && msg.sector >= 0 && msg.sector < 6) target.sector = msg.sector;
             if (Number.isInteger(msg.airport) && msg.airport >= 0 && msg.airport < 3) target.airport = msg.airport;
             if (msg.name && target === player) target.name = cleanName(msg.name);
@@ -331,6 +364,44 @@ function handle(ws, msg) {
             player.selected = Number.isInteger(msg.id) ? msg.id : null;
             sendRoom(room);
             break;
+        // gépátadás: „Átadom neki” vagy „Átvétel kérése”; a címzett elfogadja vagy elutasítja
+        case 'handoff': {
+            if (!room.sim) return;
+            const ac = room.sim.find(msg.id);
+            if (!ac || ac.kind === 'mil') return;
+            const players = publicPlayers(room);
+            const view = compactForRules(room, ac);
+            const mine = Rules.canControl(view, player, room.settings, players);
+            let to;
+            if (mine) to = room.players.get(Number(msg.to));
+            else to = room.players.get(Rules.ownersOf(view, room.settings, players).map((p) => p.id)[0]);
+            if (!to || to === player) return send(ws, { t: 'cmdResult', ok: false, text: 'Nincs kinek átadni.' });
+            const reqId = room.nextReqId = (room.nextReqId || 0) + 1;
+            room.requests = room.requests || new Map();
+            room.requests.set(reqId, { id: ac.id, from: player.id, to: to.id, give: mine, at: Date.now() });
+            send(to.ws, {
+                t: 'handoffReq', reqId, id: ac.id, cs: ac.callsign, from: player.name, color: player.color, give: mine
+            });
+            send(ws, { t: 'log', kind: 'info', text: mine ? `${ac.callsign}: átadási kérés elküldve ${to.name} részére.` : `${ac.callsign}: átvételi kérés elküldve ${to.name} részére.` });
+            break;
+        }
+        case 'handoffReply': {
+            const req = room.requests && room.requests.get(msg.reqId);
+            if (!req || req.to !== player.id || !room.sim) return;
+            room.requests.delete(msg.reqId);
+            const ac = room.sim.find(req.id);
+            const from = room.players.get(req.from);
+            if (!ac) return;
+            if (Date.now() - req.at > 30000) return send(ws, { t: 'cmdResult', ok: false, text: 'A kérés lejárt.' });
+            if (msg.accept) {
+                ac.controller = req.give ? player.id : req.from;
+                const owner = room.players.get(ac.controller);
+                broadcast(room, { t: 'log', kind: 'info', text: `${ac.callsign} mostantól ${owner ? owner.name : '?'} irányítása alatt.` });
+            } else if (from) {
+                send(from.ws, { t: 'log', kind: 'warn', text: `${player.name} elutasította: ${ac.callsign}.` });
+            }
+            break;
+        }
         case 'cmd': {
             if (!room.sim) return;
             const cmd = msg.cmd || {};
@@ -342,8 +413,8 @@ function handle(ws, msg) {
                 const ac = room.sim.find(cmd.id);
                 if (!ac) return send(ws, { t: 'cmdResult', ok: false, text: 'Ez a gép már nincs a légtérben.' });
                 const players = publicPlayers(room);
-                if (!Rules.canControl(compactForRules(ac), player, room.settings, players)) {
-                    const owners = Rules.ownersOf(compactForRules(ac), room.settings, players).map((p) => p.name);
+                if (!Rules.canControl(compactForRules(room, ac), player, room.settings, players)) {
+                    const owners = Rules.ownersOf(compactForRules(room, ac), room.settings, players).map((p) => p.name);
                     return send(ws, {
                         t: 'cmdResult',
                         ok: false,

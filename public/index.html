@@ -75,6 +75,7 @@
             <section class="panel" id="players-panel">
                 <div class="panel-head"><span>Irányítók</span><span class="count" id="mode-label"></span></div>
                 <div id="players-list"></div>
+                <div id="perks-list" class="perks-list"></div>
             </section>
         </aside>
     </main>
@@ -167,6 +168,25 @@
     </div>
 </div>
 
+<!-- Értékelés: fejlesztés választása -->
+<div id="review" class="overlay soft" hidden>
+    <div class="dialog wide">
+        <div class="kicker">Értékelés</div>
+        <h2>Jó munka! Válassz egy fejlesztést</h2>
+        <p class="hint">A fejlesztés a műszak végéig megmarad. Multiban bárki választhat, és az egész csapat megkapja. A játék közben tovább megy.</p>
+        <div id="review-cards" class="review-cards"></div>
+    </div>
+</div>
+
+<!-- Átadási kérés -->
+<div id="handoff-req" class="handoff-req" hidden>
+    <div id="handoff-text"></div>
+    <div class="row">
+        <button id="handoff-yes" class="btn primary">Elfogadom</button>
+        <button id="handoff-no" class="btn ghost">Elutasítom</button>
+    </div>
+</div>
+
 <!-- Súgó -->
 <div id="help" class="overlay" hidden>
     <div class="dialog wide">
@@ -182,7 +202,7 @@
                     <tr><td><kbd>X</kbd></td><td>Felszállás</td></tr>
                     <tr><td><kbd>R</kbd></td><td>Várakozó körözés be/ki</td></tr>
                     <tr><td><kbd>G</kbd></td><td>Átstartolás végső megközelítésen</td></tr>
-                    <tr><td><kbd>F</kbd></td><td>Vadászgépek indítása az eltérített gép ellen</td></tr>
+                    <tr><td><kbd>F</kbd></td><td>Vadászgépek indítása: eltérített gép elfogása vagy VIP gép kísérete</td></tr>
                     <tr><td><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Következő / előző induló</td></tr>
                     <tr><td><kbd>N</kbd> / <kbd>Shift</kbd>+<kbd>N</kbd></td><td>Legújabb / régebbi gép a légtérben</td></tr>
                     <tr><td><kbd>W</kbd> / <kbd>S</kbd></td><td>Sebesség ±10 csomó (<kbd>Shift</kbd>: max / min)</td></tr>
@@ -204,7 +224,7 @@
                     <li>Görgő: nagyítás, jobb gombos húzás: mozgatás.</li>
                 </ul>
                 <h3>Színek</h3>
-                <p><span class="arr-c">■ Érkező</span> &nbsp; <span class="dep-c">■ Induló</span> &nbsp; <span class="tr-c">■ Átrepülő</span> &nbsp; <span class="em-c">■ Vészhelyzet / kényszerleszállás</span> &nbsp; <span style="color:#ff9f1c">■ Eltérített</span> &nbsp; <span style="color:#7bd88f">▲ Vadászgép</span> &nbsp; <span class="bad-c">◯ Konfliktus</span></p>
+                <p><span class="arr-c">■ Érkező</span> &nbsp; <span class="dep-c">■ Induló</span> &nbsp; <span class="tr-c">■ Átrepülő</span> &nbsp; <span class="em-c">■ Vészhelyzet / kényszerleszállás</span> &nbsp; <span style="color:#ff9f1c">■ Eltérített</span> &nbsp; <span style="color:#ffd84d">■ VIP</span> &nbsp; <span style="color:#7bd88f">▲ Vadászgép</span> &nbsp; <span class="bad-c">◯ Konfliktus</span></p>
                 <p>Zivatar: a zöld és sárga rész átrepülhető, de ha egy gép a <span class="bad-c">piros magba</span> repül, vége a műszaknak.
                     Ha egy gép a mag felé tart, piros villogó kör és riasztás figyelmeztet.</p>
                 <p>Köd: a benne repülő gép (szürke, „?” jellel) nem tudja, hol jár. Egyenesen repül tovább, és amíg ki nem ér, nem irányítható.

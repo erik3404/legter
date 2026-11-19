@@ -385,3 +385,185 @@ test('hurrikán: nagyobb zivatar, a magja a műszak végét jelenti', () => {
     assert.strictEqual(sim.storms.length, 1);
     assert.ok(sim.storms[0].hurricane && sim.storms[0].r >= 6);
 });
+
+// ---------- fejlesztések ----------
+test('értékelés: 30 lekezelt gép vagy 8 perc után 3 fejlesztésből lehet választani', () => {
+    const sim = makeSim('LOWW');
+    sim.aircraft = [];
+    sim.stats.landed = 30;
+    sim.step(0.1);
+    assert.ok(sim.review && sim.review.options.length === 3);
+    const pick = sim.review.options[1];
+    assert.strictEqual(sim.command({ type: 'choosePerk', perk: 'nincs-ilyen' })[0], false);
+    assert.ok(sim.command({ type: 'choosePerk', perk: pick })[0]);
+    assert.ok(sim.hasPerk(pick) && sim.review === null);
+    sim.step(0.1);
+    assert.strictEqual(sim.review, null, 'a következő csak újabb 30 gép után');
+    sim.time = 1000;
+    sim.step(0.1);
+    assert.ok(sim.review && !sim.review.options.includes(pick), 'idő alapján is jön, a meglévő nem ajánlható újra');
+});
+
+test('Fejlesztések nélkül szabály: nincs értékelés', () => {
+    const sim = makeSim('LOWW', { noPerks: true });
+    sim.stats.landed = 100;
+    sim.time = 5000;
+    sim.step(0.1);
+    assert.strictEqual(sim.review, null);
+    assert.ok(Math.abs(sim.multiplier / makeSim('LOWW').multiplier - 1.1) < 0.02);
+});
+
+test('Fürge szárnyak: 25%-kal gyorsabb fordulás', () => {
+    const turnIn = (perk) => {
+        const sim = makeSim('LOWW');
+        sim.aircraft = [];
+        if (perk) sim.perks.add('agile');
+        const a = sim._spawnTransit();
+        Object.assign(a, { x: 0, y: 0, hdg: 0, route: [[10, 0]] });
+        sim.step(1);
+        return a.hdg;
+    };
+    assert.ok(Math.abs(turnIn(true) / turnIn(false) - 1.25) < 0.01);
+});
+
+test('Felszállási sor: foglalt kifutónál sorba áll, és magától felszáll', () => {
+    const sim = makeSim('EGLL');
+    const [d1, d2] = sim.aircraft.filter((a) => a.state === 'ground');
+    sim.aircraft = [d1, d2];
+    d2.runway = d1.runway;
+    assert.ok(sim.command({ type: 'takeoff', id: d1.id })[0]);
+    assert.strictEqual(sim.command({ type: 'takeoff', id: d2.id })[0], false, 'fejlesztés nélkül nem áll sorba');
+    sim.perks.add('takeoffQueue');
+    const [ok, msg] = sim.command({ type: 'takeoff', id: d2.id });
+    assert.ok(ok && d2.queued, msg);
+    for (let i = 0; i < 600 && d2.state === 'ground'; i++) sim.step(0.1);
+    assert.strictEqual(d2.state, 'takeoff');
+});
+
+test('Pontos sebesség és Rugalmas kijárat csak fejlesztéssel, kijáratcsere 2 percenként', () => {
+    const sim = makeSim('LOWW');
+    sim.aircraft = [];
+    const a = sim._spawnTransit();
+    assert.strictEqual(sim.command({ type: 'speed', id: a.id, value: 200 })[0], false);
+    sim.perks.add('exactSpeed');
+    assert.ok(sim.command({ type: 'speed', id: a.id, value: 999 })[0]);
+    assert.strictEqual(a.targetSpd, Math.round(a.cruise * 1.2));
+    const other = sim.gates.find((g) => g.letter !== a.exitGate);
+    assert.strictEqual(sim.command({ type: 'changeExit', id: a.id, gate: other.letter })[0], false);
+    sim.perks.add('flexExit');
+    assert.ok(sim.command({ type: 'changeExit', id: a.id, gate: other.letter })[0]);
+    assert.strictEqual(a.exitGate, other.letter);
+    const third = sim.gates.find((g) => g.letter !== a.exitGate);
+    assert.strictEqual(sim.command({ type: 'changeExit', id: a.id, gate: third.letter })[0], false, 'várakozási idő');
+});
+
+test('Korábbi átvétel: a belépő gép 6 mp-cel előbb jelzésként látszik', () => {
+    const sim = makeSim('LOWW');
+    sim.aircraft = [];
+    sim.perks.add('earlyHandoff');
+    sim.timers.arrival = 0;
+    sim.step(0.1);
+    sim.timers.arrival = 1e9;
+    assert.strictEqual(sim.incoming.length, 1);
+    assert.strictEqual(sim.aircraft.length, 0);
+    for (let i = 0; i < 61; i++) sim.step(0.1);
+    assert.strictEqual(sim.incoming.length, 0);
+    assert.strictEqual(sim.aircraft.filter((a) => a.kind === 'arr').length, 1);
+});
+
+test('Sorrendjelzés: sorszám és távköz kifutónként', () => {
+    const sim = makeSim('LOWW');
+    sim.aircraft = [];
+    sim.perks.add('sequencing');
+    const a = sim._spawnArrival();
+    const b = sim._spawnArrival() || sim._spawnArrival();
+    sim.command({ type: 'runway', id: a.id, runway: 0 });
+    sim.command({ type: 'runway', id: b.id, runway: 0 });
+    Object.assign(a, { x: a.x / 3, y: a.y / 3 });
+    const snap = sim.snapshot();
+    const sa = snap.aircraft.find((x) => x.id === a.id);
+    const sb = snap.aircraft.find((x) => x.id === b.id);
+    assert.deepStrictEqual([sa.sq, sb.sq].sort(), [1, 2]);
+    assert.ok((sa.sq === 2 ? sa.gp : sb.gp) >= 0);
+    assert.ok(sa.eta > 0);
+});
+
+// ---------- VIP ----------
+test('VIP gép: kifutók zárva, kíséret nélkül incidens, kísérettel leszállva +30 pont', () => {
+    const sim = makeSim('LOWW', { security: true });
+    sim.timers.hijack = 1e9;
+    const dep = sim.aircraft.find((a) => a.state === 'ground');
+    sim.aircraft = [dep];
+    sim.timers.vip = 0;
+    sim.step(0.1);
+    const vip = sim.aircraft.find((a) => a.vip);
+    assert.ok(vip && vip.priority);
+    const [ok, msg] = sim.command({ type: 'takeoff', id: dep.id });
+    assert.strictEqual(ok, false);
+    assert.match(msg, /VIP/);
+    assert.ok(sim.command({ type: 'scramble', id: vip.id })[0]);
+    assert.strictEqual(sim.aircraft.filter((a) => a.kind === 'mil').length, 2);
+    sim.command({ type: 'runway', id: vip.id, runway: 0 });
+    const before = sim.stats.base;
+    for (let i = 0; i < 9000 && sim.aircraft.includes(vip); i++) sim.step(0.1);
+    assert.strictEqual(sim.stats.landed, 1, JSON.stringify(sim.incidentLog));
+    assert.strictEqual(sim.stats.base - before, 10 + 30);
+    assert.ok(sim.command({ type: 'takeoff', id: dep.id })[0], 'utána lehet felszállni');
+
+    const late = makeSim('LOWW', { security: true });
+    late.timers.hijack = 1e9;
+    late.aircraft = [];
+    late.timers.vip = 0;
+    for (let i = 0; i < 650; i++) late.step(0.1);
+    assert.ok(late.incidentLog.some((x) => /kíséret nélkül/.test(x.reason)));
+});
+
+test('VIP gép: ha valaki túl közel repül hozzá, vége a műszaknak', () => {
+    const sim = makeSim('LOWW', { security: true });
+    sim.timers.hijack = 1e9;
+    sim.aircraft = [];
+    sim.timers.vip = 0;
+    sim.step(0.1);
+    sim.timers.vip = 1e9;
+    const vip = sim.aircraft.find((a) => a.vip);
+    const t = sim._spawnTransit();
+    Object.assign(vip, { x: -1, y: 0, hdg: 90, route: [[5, 0]] });
+    Object.assign(t, { x: 1, y: 0, hdg: 270, route: [[-5, 0]] });
+    for (let i = 0; i < 50 && !sim.gameOver; i++) sim.step(0.1);
+    assert.ok(sim.gameOver);
+    assert.match(sim.gameOver.reason, /Diplomáciai/);
+});
+
+// ---------- posztok és átadás ----------
+test('Bevezető – Torony – Kivezető: a zónától függ, ki irányít', () => {
+    const players = [{ id: 1, role: 'app' }, { id: 2, role: 'twr' }, { id: 3, role: 'dep' }];
+    const s = { mode: 'positions' };
+    const arrFar = { k: 'arr', st: 'airborne', x: 15, y: 0, tz: false };
+    const arrZone = { k: 'arr', st: 'final', x: 3, y: 0, tz: true };
+    const depFar = { k: 'dep', st: 'airborne', x: 10, y: 0, tz: false };
+    assert.deepStrictEqual(Rules.ownersOf(arrFar, s, players).map((p) => p.id), [1]);
+    assert.deepStrictEqual(Rules.ownersOf(arrZone, s, players).map((p) => p.id), [2]);
+    assert.deepStrictEqual(Rules.ownersOf(depFar, s, players).map((p) => p.id), [3]);
+    const two = [{ id: 1, role: 'apptwr' }, { id: 3, role: 'dep' }];
+    assert.deepStrictEqual(Rules.ownersOf(arrZone, s, two).map((p) => p.id), [1]);
+    assert.strictEqual(Rules.roleProblems('positions', players), null);
+    assert.match(Rules.roleProblems('positions', [{ role: 'app' }, { role: 'app' }]), /Senki/);
+});
+
+test('Érkező – Induló – Ügyeletes: különleges esetek az ügyeletesé', () => {
+    const players = [{ id: 1, role: 'arr' }, { id: 2, role: 'dep' }, { id: 3, role: 'duty' }];
+    const s = { mode: 'roles' };
+    assert.deepStrictEqual(Rules.ownersOf({ k: 'arr', st: 'airborne' }, s, players).map((p) => p.id), [1]);
+    assert.deepStrictEqual(Rules.ownersOf({ k: 'arr', st: 'airborne', em: 1 }, s, players).map((p) => p.id), [3]);
+    assert.deepStrictEqual(Rules.ownersOf({ k: 'arr', st: 'airborne', vp: true }, s, players).map((p) => p.id), [3]);
+    assert.deepStrictEqual(Rules.ownersOf({ k: 'transit', st: 'airborne' }, s, players).map((p) => p.id), [3]);
+    const two = players.slice(0, 2);
+    assert.deepStrictEqual(Rules.ownersOf({ k: 'arr', st: 'airborne', em: 1 }, s, two).map((p) => p.id), [1], 'ügyeletes nélkül az érkezőé');
+});
+
+test('átadás: a megkapott gépet csak az új gazdája irányítja', () => {
+    const players = [{ id: 1, role: 'arr' }, { id: 2, role: 'dep' }];
+    const ac = { k: 'arr', st: 'airborne', ow: 2 };
+    assert.deepStrictEqual(Rules.ownersOf(ac, { mode: 'roles' }, players).map((p) => p.id), [2]);
+    assert.deepStrictEqual(Rules.ownersOf({ k: 'arr', st: 'airborne', ow: 9 }, { mode: 'roles' }, players).map((p) => p.id), [1], 'kilépett gazda');
+});

@@ -43,9 +43,17 @@ A szobagazda a lobbiban választ módot:
 - **Saját reptér (2–3 fő)**: többrepteres pálya (London: Heathrow, Gatwick, London City · New York: JFK, Newark ·
   Washington: Dulles, Reagan National · Tokió: Haneda, Narita). Ahányan vagytok (legfeljebb 3), annyi reptér él,
   és mindenki csak a saját repterének gépeit irányítja.
-- **Leszállás + felszállás (2 fő)**: egy reptér, az egyik játékos a leszállókért, a másik a felszállókért felel.
+- **Bevezető – Torony – Kivezető (2–3 fő)**: mint a valódi légiirányításban. A bevezető hozza be az érkezőket,
+  a torony kezeli a reptér körüli zónát (felszállás, végső megközelítés, leszállás), a kivezető viszi ki az
+  indulókat és az átrepülőket. A gép magától kerül át a következő irányítóhoz. Két főnél: Bevezető + Torony és Kivezető.
+- **Érkező – Induló – Ügyeletes (2–3 fő)**: az érkező a leszállókat, az induló a felszállókat irányítja,
+  az ügyeletes az átrepülőket és a különleges eseteket (vészhelyzet, kényszerleszállás, VIP gép).
 - **Szabad**: mindenki minden gépet irányíthat (legfeljebb 6 fő).
 - **Szektoros**: a légteret szeletekre osztjuk, mindenki a saját szeletét kezeli (legfeljebb 6 fő).
+
+A posztokat a lobbiban választjátok ki; ha egy poszt üres vagy ketten választották, a játék szól.
+Játék közben a kijelölt gépnél **„Átadom neki”** gombbal átadhatod egy társadnak, vagy **„Átvétel kérése”**
+gombbal elkérheted tőle; a másik fél elfogadja vagy elutasítja.
 
 A többiek a 4 betűs szobakóddal vagy a megosztott linkkel lépnek be.
 
@@ -57,7 +65,28 @@ A többiek a 4 betűs szobakóddal vagy a megosztott linkkel lépnek be.
   a repterén senki más nem szállhat le.
 - **Eltérítés**: egy gép nem válaszol, és egy reptér felé fordul. Az **F** billentyűvel vadászgépeket indíthatsz:
   ha elfogják, a gép kényszerleszállást hajt végre (+25 pont). Ha eléri a repteret, vége a műszaknak.
+- **VIP (államfői) gép**: amíg le nem száll, a repterén minden kifutó zárva. 60 mp-en belül Gripen-kíséretet
+  kell indítani (**F**); ha bárki túl közel repül hozzá, vége a műszaknak. Kísért leszállás: +30 pont.
 - **Kifutó-ellenőrzés**: egy kifutót egy perc figyelmeztetés után néhány percre lezárnak.
+
+## Fejlesztések
+
+30 lekezelt gépenként vagy 8 percenként (amelyik előbb jön) értékelés jön: 3 fejlesztésből választhattok egyet,
+ami a műszak végéig megmarad (multiban az egész csapaté).
+
+| Fejlesztés | Hatás |
+| --- | --- |
+| Fürge szárnyak | 25%-kal gyorsabb fordulás, a várakozó körben is |
+| Korai radar | a kialakuló konfliktust 5 mp-cel korábban, sárgán jelzi |
+| Érkezési távköz | 3 mp-cel több idő két érkező között, zsúfolt légtérben még több |
+| Gyors kigurulás | a leszálló gépek egyhatodával hamarabb hagyják el a kifutót |
+| Korábbi átvétel | a belépő gép 6 mp-cel korábban jelzésként látszik a kapunál |
+| Pontos sebesség | pontos sebesség adható meg az utazósebesség ±20%-án belül |
+| Felszállási sor | foglalt kifutónál az induló sorba áll, és magától felszáll |
+| Sorrendjelzés | várható földet érés, leszállási sorszám és távköz az előző géptől |
+| Rugalmas kijárat | kétpercenként egy induló vagy átrepülő kijárata megváltoztatható |
+
+A „Fejlesztések nélkül” szabály (×1.10) kikapcsolja az értékelést.
 
 Telefonon és tableten is játszható: koppintás, húzás, kétujjas nagyítás.
 

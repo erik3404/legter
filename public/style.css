@@ -372,3 +372,30 @@ table.keys td:first-child { white-space: nowrap; }
 .ac-row.k-mil { border-left-color: #7bd88f; opacity: .8; }
 .ap-tag { display: inline-block; font: 10px var(--mono); color: var(--accent); border: 1px solid var(--accent); border-radius: 4px; padding: 0 5px; margin-left: 6px; vertical-align: middle; }
 .mode-warn { color: var(--tr); font-size: 12px; margin: 0 0 8px; }
+
+/* VIP, sorrend, fejlesztések, átadás */
+.vip-banner { background: rgba(255,216,77,.1); border: 1px solid #ffd84d; color: #ffe58a; border-radius: 8px; padding: 6px 10px; font-size: 13px; margin-bottom: 8px; }
+.seq-banner { background: var(--panel-2); border: 1px solid var(--line); color: var(--text); border-radius: 8px; padding: 5px 10px; font-size: 12px; margin-bottom: 8px; }
+.btn.vip { background: #ffd84d; border-color: #ffd84d; color: #2a2000; font-weight: 600; margin-top: 6px; }
+.btn.gate-btn { min-width: 30px; padding: 4px 8px; }
+.btn.gate-btn.active { border-color: var(--dep); color: var(--dep); }
+.num-input { width: 90px; background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 5px 8px; font: 13px var(--mono); }
+.handoff-row select { background: var(--bg); color: var(--text); border: 1px solid var(--line); border-radius: 6px; padding: 4px 6px; }
+#toast.vip { border-color: #ffd84d; }
+#toast.vip b { color: #ffd84d; }
+.overlay.soft { background: rgba(5,9,15,.45); }
+.review-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; }
+.perk-card { text-align: left; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 14px; display: flex; flex-direction: column; gap: 6px; color: var(--text); }
+.perk-card:hover { border-color: var(--accent); }
+.perk-card b { color: var(--accent); font-size: 15px; }
+.perk-card span { color: var(--muted); font-size: 13px; }
+.perks-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 8px; align-items: center; }
+.perk-chip { font: 10px var(--mono); border: 1px solid var(--accent); color: var(--accent); border-radius: 10px; padding: 1px 7px; }
+.perks-list .hint { margin: 0; font-size: 11px; width: 100%; }
+.handoff-req {
+    position: fixed; top: 70px; left: 50%; transform: translateX(-50%); z-index: 20; background: var(--panel);
+    border: 1px solid var(--accent); border-radius: 12px; padding: 14px 18px; box-shadow: 0 16px 40px rgba(0,0,0,.5); font-size: 14px;
+}
+.handoff-req[hidden] { display: none; }
+.panel-head { gap: 10px; }
+.panel-head > span:last-child { text-align: right; }
