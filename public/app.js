@@ -436,6 +436,11 @@
 
     function checkConflicts() {
         if (!state.snap) return;
+        // szünetben nem sípol (a konfliktus ilyenkor „befagy”, és folyamatosan szólna)
+        if (state.room && state.room.paused) {
+            alerts.conflictIds = new Set(state.snap.aircraft.filter((a) => a.cf && canControl(a)).map((a) => a.id));
+            return;
+        }
         const now = performance.now();
         const ids = new Set(state.snap.aircraft.filter((a) => a.cf && canControl(a)).map((a) => a.id));
         let fresh = false;

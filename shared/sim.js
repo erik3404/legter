@@ -1498,6 +1498,11 @@ class Sim {
         return true;
     }
 
+    // leszálló gép: érkező, amely már kifutót kapott (megközelítésen vagy végső megközelítésen)
+    _landing(a) {
+        return a.kind === 'arr' && a.runway != null && (a.state === 'airborne' || a.state === 'final') && !a.hold;
+    }
+
     // közelednek-e egymáshoz (a relatív sebesség a másik felé mutat)
     _closing(a, b) {
         const va = [Math.sin(toRad(a.hdg)) * a.spd, Math.cos(toRad(a.hdg)) * a.spd];
@@ -1524,6 +1529,8 @@ class Sim {
                 // a leszállási és felszállási sávban (végső megközelítés, felszállás) a gépeket a pálya
                 // vezeti egymás mögött vagy párhuzamosan: ott nincs figyelmeztetés és incidens, csak ütközés
                 if (this._runwayProtected(a) && this._runwayProtected(b) && d > SEPARATION.crashNm) continue;
+                // két leszálló (kifutóval rendelkező érkező) egymáshoz képest: nincs jelzés, csak ütközés
+                if (this._landing(a) && this._landing(b) && d > SEPARATION.crashNm) continue;
                 // figyelmeztetés csak valódi veszélynél: nagyon közel vannak, vagy közelednek / keresztezik egymás útját
                 if (d < SEPARATION.lossNm || this._closing(a, b) || this._pathsCross(a, b)) {
                     a.conflict = true;

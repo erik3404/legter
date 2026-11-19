@@ -667,3 +667,20 @@ test('leszállási sáv: párhuzamos végső megközelítésen nincs sípolás �
     assert.ok(!warned, 'nem sípol');
     assert.strictEqual(sim.stats.incidents, 0, JSON.stringify(sim.incidentLog));
 });
+
+test('két leszálló gép között nincs jelzés és incidens, csak ütközés számít', () => {
+    const sim = makeSim('KORD');
+    sim.aircraft = [];
+    const a = sim._spawnArrival();
+    const b = sim._spawnArrival() || sim._spawnArrival();
+    Object.assign(a, { x: 5, y: 1, hdg: 270, runway: 0, state: 'airborne', route: [] });
+    Object.assign(b, { x: 5, y: -0.2, hdg: 270, runway: 1, state: 'airborne', route: [[-10, 3]] });
+    sim._checkSeparation();
+    assert.ok(!a.conflict && !b.conflict);
+    assert.strictEqual(sim.stats.incidents, 0);
+    // egy indulóval szemben viszont jelez
+    const d = sim._spawnTransit();
+    Object.assign(d, { x: 3, y: 1, hdg: 90, kind: 'dep', route: [[10, 1]] });
+    sim._checkSeparation();
+    assert.ok(a.conflict && d.conflict);
+});
