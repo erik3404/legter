@@ -685,7 +685,7 @@ test('két leszálló gép között nincs jelzés és incidens, csak ütközés 
     assert.ok(a.conflict && d.conflict);
 });
 
-test('megközelítés: a gép a kifutó tengelyén marad (Chicago és Budapest, minden kapuból, minden kifutóra)', () => {
+test('megközelítés: a gép a kifutó tengelyén ér földet (Chicago és Budapest, minden kapuból, minden kifutóra)', () => {
     for (const icao of ['KORD', 'LHBP']) {
         const base = makeSim(icao);
         for (const rw0 of base.runways) {
@@ -703,11 +703,11 @@ test('megközelítés: a gép a kifutó tengelyén marad (Chicago és Budapest, 
                     sim.step(0.1);
                     if (a.state === 'final') {
                         const { along, cross } = sim._alongAndCross(a, rw);
-                        if (along < 4) maxCross = Math.max(maxCross, Math.abs(cross));
+                        if (along < 0.7) maxCross = Math.max(maxCross, Math.abs(cross));
                     }
                 }
                 assert.strictEqual(sim.stats.landed, 1, `${icao} ${sim.runwayName(rw)} kapu ${gates[g].letter}`);
-                assert.ok(maxCross < 0.3, `${icao} ${sim.runwayName(rw)} kapu ${gates[g].letter}: ${maxCross.toFixed(2)} nm eltérés`);
+                assert.ok(maxCross < 0.1, `${icao} ${sim.runwayName(rw)} kapu ${gates[g].letter}: ${maxCross.toFixed(2)} nm eltérés`);
             }
         }
     }
@@ -731,4 +731,19 @@ test('Saját reptér mód: gazdátlan reptér gépeit bárki irányíthatja', ()
     const ac = { k: 'arr', st: 'airborne', ap: 2 };
     assert.ok(Rules.canControl(ac, players[0], { mode: 'airports' }, players));
     assert.ok(Rules.canControl(ac, players[1], { mode: 'airports' }, players));
+});
+
+test('megközelítés: a legrövidebb úton, a kifutó közelében csatlakozik, és a kirajzolt terv azonos a repülttel', () => {
+    const sim = makeSim('LHBP');
+    sim.aircraft = [];
+    const a = sim._spawnArrival();
+    sim.command({ type: 'runway', id: a.id, runway: 0 });
+    const rw = sim.runways[0];
+    const plan = sim.snapshot().aircraft.find((x) => x.id === a.id).aj;
+    const join = plan[plan.length - 1];
+    const { along } = sim._alongAndCross({ x: join[0], y: join[1] }, rw);
+    assert.ok(along < 16, 'a tengelyen');
+    // a terv nem változik repülés közben (amíg nem adunk új parancsot)
+    for (let i = 0; i < 100; i++) sim.step(0.1);
+    if (a.state === 'airborne') assert.deepStrictEqual(sim.snapshot().aircraft.find((x) => x.id === a.id).aj, plan);
 });

@@ -13,6 +13,7 @@ const GATE_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
 const GATE_BEARINGS = [72, 108, 180, 252, 288, 0];
 const FAF_DISTANCE = 6;
 const GLIDE_FT_PER_NM = 318;
+const SHORT_FINAL_NM = 1.5;    // a tengelyre csatlakozás legközelebb ennyire a küszöbtől (a kifutó előtti számnál)
 // A játék gyorsított időben fut: a mozgás TIME_SCALE-szer gyorsabb a valóságosnál,
 // az üzemanyag- és várakozási idők viszont valódi másodpercek.
 const TIME_SCALE = 2.5;
@@ -583,8 +584,7 @@ class Sim {
 
     _routeEndpoint(a) {
         if (a.kind === 'arr' && a.runway != null) {
-            const rw = this.runways[a.runway];
-            return fromBearing(this.threshold(rw), norm360(this.landingHeading(rw) + 180), FAF_DISTANCE);
+            return this._plan(a, this.runways[a.runway])[0];
         }
         if (a.exitGate) return this._gate(a.exitGate).pos;
         return null;
@@ -602,7 +602,7 @@ class Sim {
     _stopHolding(a) {
         a.hold = false;
         a.autoHold = false;
-        a.appPhase = null;
+        this._replan(a);
     }
 
     _cmdAddWaypoint(a, { x, y, index }) {
@@ -785,6 +785,7 @@ class Sim {
         const p3 = fromBearing(fromBearing(this.threshold(rw), norm360(hdg + 180), 11), norm360(hdg + 90), 4);
         a.state = 'airborne';
         a.route = [p1, p2, p3].map((p) => this._clamp(p[0], p[1]));
+        this._replan(a);
         a.targetAlt = ALT.approach;
         a.targetSpd = a.cruise;
         a.hold = false;
@@ -1161,11 +1162,10 @@ class Sim {
                 const rw = this.runways[a.runway];
                 if (a.state === 'final') remaining = Math.max(0, this._alongAndCross(a, rw).along);
                 else {
-                    const faf = fromBearing(this.threshold(rw), norm360(this.landingHeading(rw) + 180), FAF_DISTANCE);
                     let d = 0;
                     let prev = [a.x, a.y];
-                    for (const p of a.route) { d += dist(prev, p); prev = p; }
-                    remaining = d + dist(prev, faf) + FAF_DISTANCE;
+                    for (const p of [...a.route, ...this._plan(a, rw)]) { d += dist(prev, p); prev = p; }
+                    remaining = d + dist(prev, this.threshold(rw));
                 }
                 const eta = remaining / v;
                 out.set(a.id, { eta });
@@ -1245,11 +1245,11 @@ class Sim {
         a.y += Math.cos(toRad(a.hdg)) * d;
     }
 
-    _approachSpeedAndAlt(a, dt) {
+    _approachSpeedAndAlt(a, dt, expedite = false) {
         if (a.targetSpd > a.spd) a.spd = Math.min(a.targetSpd, a.spd + ACCEL * dt);
         else a.spd = Math.max(a.targetSpd, a.spd - ACCEL * dt);
         if (a.targetAlt > a.alt) a.alt = Math.min(a.targetAlt, a.alt + CLIMB_RATE * dt);
-        else a.alt = Math.max(a.targetAlt, a.alt - DESCENT_RATE * dt);
+        else a.alt = Math.max(a.targetAlt, a.alt - DESCENT_RATE * (expedite ? 2 : 1) * dt);
     }
 
     _updateAircraft(a, dt) {
@@ -1363,7 +1363,7 @@ class Sim {
         }
 
         let target = null;
-        let approachHdg = null;
+        let expedite = false;
         if (a.hold) {
             a.hdg = norm360(a.hdg + this._turnRate() * dt);
         } else if (a.route.length) {
@@ -1384,35 +1384,51 @@ class Sim {
                     this._flyFinal(a, dt);
                     return;
                 }
-                const faf = fromBearing(this.threshold(rw), norm360(this.landingHeading(rw) + 180), FAF_DISTANCE);
-                if (blocked && dist([a.x, a.y], faf) < 2.5) {
-                    // kényszerleszállás miatt a megközelítési pontnál kör
+                let path = this._plan(a, rw);
+                // a kerülő pont elérése után újratervezés a gép mostani helyéről
+                if (path.length > 1 && dist([a.x, a.y], path[0]) < 1) {
+                    this._replan(a);
+                    path = this._plan(a, rw);
+                }
+                const join = path[path.length - 1];
+                const dj = dist([a.x, a.y], join);
+                if (blocked && dj < 2.5) {
+                    // kényszerleszállás miatt a csatlakozási pontnál kör
                     a.hold = true;
                     a.autoHold = true;
                 }
-                target = this._approachTarget(a, rw);
-                if (a.appPhase === 'intercept') {
-                    // ráfordulás legfeljebb 30°-os szögben, és lassítás a kisebb fordulóív miatt
-                    approachHdg = this.landingHeading(rw);
-                    a.targetSpd = Math.min(a.targetSpd, Math.max(CLASSES[a.cls].approach + 30, 190));
+                if (!blocked && path.length === 1) {
+                    // időben kezdett ráfordulás a tengelyre (a fordulókör sugara és a szög alapján)
+                    const ang = Math.abs(angleDiff(a.hdg, this.landingHeading(rw)));
+                    const radius = (a.spd * KT_TO_NMPS) / (this._turnRate() * Math.PI / 180);
+                    const lead = radius * Math.tan(toRad(Math.min(ang, 90)) / 2) + 0.2;
+                    if (dj <= Math.max(0.5, lead)) {
+                        a.state = 'final';
+                        this._flyFinal(a, dt);
+                        return;
+                    }
                 }
+                target = path[0];
+                // a csatlakozás előtt lassít, hogy kisebb ívben forduljon
+                if (dj < 5) a.targetSpd = Math.min(a.targetSpd, Math.max(CLASSES[a.cls].approach + 30, 190));
+                // engedélyezett megközelítés: a hátralévő út alapján folyamatosan süllyed a siklópályára
+                let remain = 0;
+                let prev = [a.x, a.y];
+                for (const p of path) { remain += dist(prev, p); prev = p; }
+                remain += dist(prev, this.threshold(rw));
+                a.targetAlt = Math.min(a.targetAlt, Math.max(ALT.min, Math.round(remain * GLIDE_FT_PER_NM / 100) * 100));
+                // ha a siklópálya fölött van, gyorsított süllyedés (különben rövid úton túl magasan érne a kifutóhoz)
+                expedite = a.alt > remain * GLIDE_FT_PER_NM + 500;
             } else if (a.exitGate && (!this.rules.manualRouting || a.routedToGate)) {
                 const gate = this._gate(a.exitGate);
                 // messziről a kapura, közelről a kapun túli pontra célzunk
                 target = dist([a.x, a.y], gate.pos) > 3 ? gate.pos : this._gateExitTarget(gate);
             }
         }
-        if (target) {
-            let desired = bearing([a.x, a.y], target);
-            if (approachHdg != null) {
-                const off = angleDiff(approachHdg, desired);
-                if (Math.abs(off) > 30) desired = norm360(approachHdg + Math.sign(off) * 30);
-            }
-            this._turnToward(a, desired, dt);
-        }
+        if (target) this._turnToward(a, bearing([a.x, a.y], target), dt);
         // magasság nélküli játékban az indulók és átrepülők maguktól a kilépési szintre emelkednek
         if (!this.rules.altitude && a.kind !== 'arr') a.targetAlt = Math.max(a.targetAlt, 9000);
-        this._approachSpeedAndAlt(a, dt);
+        this._approachSpeedAndAlt(a, dt, expedite);
         this._move(a, dt);
 
         this._checkExit(a);
@@ -1463,32 +1479,75 @@ class Sim {
         return along > 3.5 && along < 18 && Math.abs(cross) < 0.8 && hdgOk;
     }
 
-    // a megközelítés két lépése a végső megközelítés előtt:
-    // 1) ha a gép rossz oldalról vagy rossz szögből jön, előbb a tengely 9 nm-es belépési pontjára repül;
-    // 2) onnan (vagy ha eleve jó irányból jön, azonnal) legfeljebb ~30°-os szögben ráfordul a tengelyre.
-    _approachTarget(a, rw) {
-        const { along, cross } = this._alongAndCross(a, rw);
+    // Megközelítési út a végső megközelítésig, a lehető legrövidebben (mint a Vectors-ban):
+    // a tengely azon pontjára (J) repül egyenesen, ahol az odaút + a végső megközelítés a legrövidebb,
+    // és a ráfordulás legfeljebb 45°. Ha a kifutó mögül vagy mellőle jön, egy oldalsó ponton át kerül.
+    // Visszaadja a pontokat a csatlakozási pontig (az utolsó a J).
+    // ac (opcionális): ha a gép helyéről tervezünk, a gép iránya és magassága is számít
+    _approachPath(rw, from, ac = null) {
         const lhdg = this.landingHeading(rw);
         const back = norm360(lhdg + 180);
-        const onAxis = (d) => fromBearing(this.threshold(rw), back, d);
-        const entry = onAxis(FAF_DISTANCE + 3);
-        if (a.appRunway !== rw.index) {
-            a.appRunway = rw.index;
-            a.appPhase = null;
+        const thr = this.threshold(rw);
+        const onAxis = (d) => fromBearing(thr, back, d);
+        const inside = (p) => this._inside(p[0], p[1], -1.5);
+        let best = null;
+        for (let D = SHORT_FINAL_NM; D <= 16; D += 0.25) {
+            const j = onAxis(D);
+            if (!inside(j)) continue;
+            const d = dist(from, j);
+            const brg = bearing(from, j);
+            const ang = d < 0.3 ? 0 : Math.abs(angleDiff(brg, lhdg));
+            if (ang > 45) continue;
+            // csak olyan pontra, ameddig le tud süllyedni (gyorsított süllyedéssel is legfeljebb ~650 láb/nm)
+            if (ac && ac.alt > (d + D) * 650 + 300) continue;
+            // a gép háta mögötti, közeli pontra nem lehet ráfordulni: ilyenkor messzebbi pontot választunk
+            if (ac && d < 2.5 && Math.abs(angleDiff(ac.hdg, brg)) > 90) continue;
+            const cost = d + D;
+            if (!best || cost < best.cost) best = { cost, pts: [j] };
         }
-        // a ráfordulás közben túl közel ért a kifutóhoz: vissza a belépési pontra
-        if (a.appPhase === 'intercept' && along < FAF_DISTANCE - 1.5) a.appPhase = 'entry';
-        if (!a.appPhase) {
-            // azonnal csak akkor fordul rá, ha a 30°-os ráforduláshoz van elég hely a megközelítési pont előtt
-            const goodSide = along > FAF_DISTANCE + 1 + Math.abs(cross) * 1.8 && Math.abs(cross) < 6;
-            const towardRunway = Math.abs(angleDiff(a.hdg, bearing([a.x, a.y], this.threshold(rw)))) < 100;
-            a.appPhase = goodSide && towardRunway ? 'intercept' : 'entry';
+        if (best) return best.pts;
+        // kerülő: a tengely mellé (lehetőleg a gép felőli oldalra), onnan 45°-ban rá a tengelyre;
+        // mindkét pont a légtéren belül marad, ha kell, közelebb a kifutóhoz vagy a másik oldalon
+        const ux = Math.sin(toRad(back));
+        const uy = Math.cos(toRad(back));
+        const cross = (from[0] - thr[0]) * uy - (from[1] - thr[1]) * ux;
+        const sides = cross >= 0 ? [1, -1] : [-1, 1];
+        // a kifutóhoz legközelebbi kerülő, ahonnan a gép még le tud süllyedni (és minden pont a légtérben marad)
+        for (const D of [8, 9, 10, 12, 6.5]) {
+            for (const lat of [3, 4]) {
+                for (const side of sides) {
+                    const base = onAxis(D);
+                    const via = [base[0] + uy * side * lat, base[1] - ux * side * lat];
+                    const j = onAxis(Math.max(SHORT_FINAL_NM, D - lat));
+                    if (!inside(via) || !inside(j)) continue;
+                    const len = dist(from, via) + dist(via, j) + Math.max(SHORT_FINAL_NM, D - lat);
+                    if (ac && ac.alt > len * 650 + 300) continue;
+                    return [via, j];
+                }
+            }
         }
-        if (a.appPhase === 'entry') {
-            if (dist([a.x, a.y], entry) < 1.5) a.appPhase = 'intercept';
-            else return entry;
+        return [onAxis(SHORT_FINAL_NM + 2)];
+    }
+
+    // a tervezett megközelítés kezdőpontja: az utolsó útpont, ha van, különben a gép helye
+    _approachFrom(a) {
+        return a.route.length ? a.route[a.route.length - 1] : [a.x, a.y];
+    }
+
+    // A megközelítést egyszer tervezzük meg (kifutó-kijelöléskor, útvonal-változáskor, a kerülő pont
+    // elérésekor), és a gép azt repüli végig – így a kirajzolt vonal mindig pontosan az, amit a gép repül.
+    _plan(a, rw) {
+        const last = a.route.length ? a.route[a.route.length - 1].join(',') : 'pos';
+        const key = `${rw.index}|${rw.activeEnd}|${last}|${a.planEpoch || 0}`;
+        if (!a.plan || a.plan.key !== key) {
+            const fromPos = !a.route.length;
+            a.plan = { key, pts: this._approachPath(rw, this._approachFrom(a), fromPos ? a : null) };
         }
-        return onAxis(Math.max(FAF_DISTANCE - 1, along - (Math.abs(cross) * 1.8 + 1.2)));
+        return a.plan.pts;
+    }
+
+    _replan(a) {
+        a.planEpoch = (a.planEpoch || 0) + 1;
     }
 
     _flyFinal(a, dt) {
@@ -1693,7 +1752,10 @@ class Sim {
                 sc: !!a.scrambled,
                 pr: !!a.priority,
                 sw: !!a.stormWarn,
-                ae: a.kind === 'arr' && a.runway != null && a.state === 'airborne' && a.appPhase === 'entry' && a.appRunway === a.runway,
+                // a megközelítés tervezett pontjai (a kliens ezt rajzolja ki)
+                aj: a.kind === 'arr' && a.runway != null && a.state === 'airborne'
+                    ? this._plan(a, this.runways[a.runway]).map((p) => [Math.round(p[0] * 100) / 100, Math.round(p[1] * 100) / 100])
+                    : null,
                 vp: !!a.vip,
                 ed: a.vip && !a.scrambled && !a.escortMissed ? Math.max(0, Math.ceil(a.escortDue)) : null,
                 pc: !!a.predicted,

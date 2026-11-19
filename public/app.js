@@ -997,10 +997,9 @@
             const ux = (thr[0] - other[0]) / len;
             const uy = (thr[1] - other[1]) / len;
             const faf = [thr[0] + ux * state.info.fafDistance, thr[1] + uy * state.info.fafDistance];
-            // ha rossz irányból jön, előbb a tengely belépési pontjára (FAF + 3 nm) repül
-            const entry = [thr[0] + ux * (state.info.fafDistance + 3), thr[1] + uy * (state.info.fafDistance + 3)];
             if (a.st === 'final') return [thr];
-            return a.ae && !routeFor(a).length ? [entry, faf, thr] : [faf, thr];
+            // a szerver által tervezett legrövidebb csatlakozás a tengelyre, majd a kifutó
+            return a.aj && a.aj.length ? [...a.aj, thr] : [faf, thr];
         }
         if (a.eg && !(rules().manualRouting && !a.r.length && a.st !== 'ground')) {
             const g = state.info.gates.find((x) => x.letter === a.eg);
@@ -1893,7 +1892,10 @@
         const p = posOf(a);
         const prefix = departurePrefix(a);
         const start = prefix ? prefix[prefix.length - 1] : [p.x, p.y];
-        const pts = [start, ...routeFor(a), ...routeEnd(a).slice(0, 1)].map((q) => toScreen(...q));
+        // érkezőnél a csatlakozási pontig minden szakasz húzható (a végső megközelítés nem), egyébként a kapuig
+        const end = routeEnd(a);
+        const tail = a.k === 'arr' ? end.slice(0, -1) : end;
+        const pts = [start, ...routeFor(a), ...tail].map((q) => toScreen(...q));
         for (let i = 0; i < pts.length - 1; i++) {
             const [ax, ay] = pts[i];
             const [bx, by] = pts[i + 1];
@@ -2087,6 +2089,7 @@
         if (d.type === 'seg' && !d.moved) {
             const a = state.acById.get(d.id);
             if (!a) return;
+            d.index = Math.min(d.index, a.r.length);
             state.localRoute = { id: d.id, route: a.r.map((p) => p.slice()) };
             state.localRoute.route.splice(d.index, 0, [x, y]);
             cmd('addWaypoint', { id: d.id, x, y, index: d.index });
