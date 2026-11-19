@@ -513,15 +513,21 @@ class Sim {
 
     // ---------- kifutó-foglaltság ----------
     runwayBusy(rwIndex, ignore = null) {
-        return this.aircraft.some((a) => {
-            if (a === ignore || a.runway !== rwIndex) return false;
-            if (a.state === 'rollout' || a.state === 'takeoff') return true;
+        return !!this.runwayBusyBy(rwIndex, ignore);
+    }
+
+    // melyik gép foglalja a kifutót (és miért) – a játékosnak szóló üzenethez
+    runwayBusyBy(rwIndex, ignore = null) {
+        for (const a of this.aircraft) {
+            if (a === ignore || a.runway !== rwIndex) continue;
+            if (a.state === 'rollout') return { a, why: 'éppen leszállt, még kigurul' };
+            if (a.state === 'takeoff') return { a, why: 'éppen felszáll' };
             if (a.state === 'final') {
-                const rw = this.runways[rwIndex];
-                return dist([a.x, a.y], this.threshold(rw)) < 3;
+                const d = dist([a.x, a.y], this.threshold(this.runways[rwIndex]));
+                if (d < 3) return { a, why: `${d.toFixed(1)} nm-re leszáll` };
             }
-            return false;
-        });
+        }
+        return null;
     }
 
     // ---------- parancsok ----------
@@ -575,6 +581,7 @@ class Sim {
     _stopHolding(a) {
         a.hold = false;
         a.autoHold = false;
+        a.appPhase = null;
     }
 
     _cmdAddWaypoint(a, { x, y, index }) {
@@ -669,7 +676,11 @@ class Sim {
                 return [true, `${a.callsign} felszállási sorban, ${this.runwayName(rw)} – indul, amint szabad.`];
             }
             if (vip) return [false, `VIP gép érkezik: amíg le nem száll, ${this._airportCode(a.home)} kifutói zárva.`];
-            return [false, `${this.runwayName(rw)} foglalt, ${a.callsign} vár.`];
+            const busy = this.runwayBusyBy(a.runway);
+            const free = this.runways.find((r) => r.airport === a.home && r !== rw && this.runwayOpen(r) && !this.runwayBusy(r.index));
+            const why = busy ? ` (${busy.a.callsign} ${busy.why})` : '';
+            const tip = free ? ` Szabad: ${this.runwayName(free)} – nyomd meg a ${free.index + 1}-es gombot, majd X.` : '';
+            return [false, `${this.runwayName(rw)} foglalt${why}, ${a.callsign} vár.${tip}`];
         }
         return this._doTakeoff(a);
     }
@@ -1325,6 +1336,7 @@ class Sim {
         }
 
         let target = null;
+        let approachHdg = null;
         if (a.hold) {
             a.hdg = norm360(a.hdg + this._turnRate() * dt);
         } else if (a.route.length) {
@@ -1345,15 +1357,17 @@ class Sim {
                     this._flyFinal(a, dt);
                     return;
                 }
-                target = fromBearing(this.threshold(rw), norm360(this.landingHeading(rw) + 180), FAF_DISTANCE);
-                if (blocked && dist([a.x, a.y], target) < 2) {
+                const faf = fromBearing(this.threshold(rw), norm360(this.landingHeading(rw) + 180), FAF_DISTANCE);
+                if (blocked && dist([a.x, a.y], faf) < 2.5) {
                     // kényszerleszállás miatt a megközelítési pontnál kör
                     a.hold = true;
                     a.autoHold = true;
                 }
-                if (dist([a.x, a.y], target) < 1.2) {
-                    // FAF elérve, de rossz szögben: rávezetjük a tengelyre
-                    target = fromBearing(this.threshold(rw), norm360(this.landingHeading(rw) + 180), FAF_DISTANCE - 3);
+                target = this._approachTarget(a, rw);
+                if (a.appPhase === 'intercept') {
+                    // ráfordulás legfeljebb 30°-os szögben, és lassítás a kisebb fordulóív miatt
+                    approachHdg = this.landingHeading(rw);
+                    a.targetSpd = Math.min(a.targetSpd, Math.max(CLASSES[a.cls].approach + 30, 190));
                 }
             } else if (a.exitGate && (!this.rules.manualRouting || a.routedToGate)) {
                 const gate = this._gate(a.exitGate);
@@ -1361,7 +1375,14 @@ class Sim {
                 target = dist([a.x, a.y], gate.pos) > 3 ? gate.pos : this._gateExitTarget(gate);
             }
         }
-        if (target) this._turnToward(a, bearing([a.x, a.y], target), dt);
+        if (target) {
+            let desired = bearing([a.x, a.y], target);
+            if (approachHdg != null) {
+                const off = angleDiff(approachHdg, desired);
+                if (Math.abs(off) > 30) desired = norm360(approachHdg + Math.sign(off) * 30);
+            }
+            this._turnToward(a, desired, dt);
+        }
         // magasság nélküli játékban az indulók és átrepülők maguktól a kilépési szintre emelkednek
         if (!this.rules.altitude && a.kind !== 'arr') a.targetAlt = Math.max(a.targetAlt, 9000);
         this._approachSpeedAndAlt(a, dt);
@@ -1408,19 +1429,50 @@ class Sim {
         return { along: dx * ux + dy * uy, cross: dx * uy - dy * ux };
     }
 
+    // végső megközelítés csak akkor kezdődik, ha a gép közel van a tengelyhez és nagyjából a kifutó felé néz
     _canJoinFinal(a, rw) {
         const { along, cross } = this._alongAndCross(a, rw);
-        const hdgOk = Math.abs(angleDiff(a.hdg, this.landingHeading(rw))) < 70;
-        return along > 2 && along < 16 && Math.abs(cross) < Math.max(1, along * 0.3) && hdgOk;
+        const hdgOk = Math.abs(angleDiff(a.hdg, this.landingHeading(rw))) < 40;
+        return along > 3.5 && along < 18 && Math.abs(cross) < 0.8 && hdgOk;
+    }
+
+    // a megközelítés két lépése a végső megközelítés előtt:
+    // 1) ha a gép rossz oldalról vagy rossz szögből jön, előbb a tengely 9 nm-es belépési pontjára repül;
+    // 2) onnan (vagy ha eleve jó irányból jön, azonnal) legfeljebb ~30°-os szögben ráfordul a tengelyre.
+    _approachTarget(a, rw) {
+        const { along, cross } = this._alongAndCross(a, rw);
+        const lhdg = this.landingHeading(rw);
+        const back = norm360(lhdg + 180);
+        const onAxis = (d) => fromBearing(this.threshold(rw), back, d);
+        const entry = onAxis(FAF_DISTANCE + 3);
+        if (a.appRunway !== rw.index) {
+            a.appRunway = rw.index;
+            a.appPhase = null;
+        }
+        if (!a.appPhase) {
+            const goodSide = along > FAF_DISTANCE + 1 && Math.abs(cross) < 6;
+            const towardRunway = Math.abs(angleDiff(a.hdg, bearing([a.x, a.y], this.threshold(rw)))) < 100;
+            a.appPhase = goodSide && towardRunway ? 'intercept' : 'entry';
+        }
+        if (a.appPhase === 'entry') {
+            if (dist([a.x, a.y], entry) < 1.5) a.appPhase = 'intercept';
+            else return entry;
+        }
+        return onAxis(Math.max(FAF_DISTANCE - 1, along - (Math.abs(cross) * 1.8 + 1.2)));
     }
 
     _flyFinal(a, dt) {
         const rw = this.runways[a.runway];
         const { along, cross } = this._alongAndCross(a, rw);
         const lhdg = this.landingHeading(rw);
-        // pálya-tengelyre vezetés: a tengely egy előrébb lévő pontját követjük
-        const aim = fromBearing(this.threshold(rw), norm360(lhdg + 180), Math.max(0, along - 1.2));
-        this._turnToward(a, bearing([a.x, a.y], aim), dt);
+        // pálya-tengelyre vezetés: a tengely egy előrébb lévő pontját követjük; az oldaltávolsággal arányosan
+        // messzebbit, és legfeljebb 30°-os ráfordulással, hogy ne lőjön túl a tengelyen
+        const ahead = Math.max(1.0, Math.abs(cross) * 1.5);
+        const aim = fromBearing(this.threshold(rw), norm360(lhdg + 180), Math.max(0, along - ahead));
+        let desired = bearing([a.x, a.y], aim);
+        const off = angleDiff(lhdg, desired);
+        if (Math.abs(off) > 30) desired = norm360(lhdg + Math.sign(off) * 30);
+        this._turnToward(a, desired, dt);
         const c = CLASSES[a.cls];
         a.targetSpd = along < 4 ? c.approach : Math.max(c.approach + 20, Math.min(a.cruise, 180));
         a.spd = a.targetSpd > a.spd ? Math.min(a.targetSpd, a.spd + ACCEL * dt) : Math.max(a.targetSpd, a.spd - ACCEL * dt);
@@ -1611,6 +1663,7 @@ class Sim {
                 sc: !!a.scrambled,
                 pr: !!a.priority,
                 sw: !!a.stormWarn,
+                ae: a.kind === 'arr' && a.runway != null && a.state === 'airborne' && a.appPhase === 'entry' && a.appRunway === a.runway,
                 vp: !!a.vip,
                 ed: a.vip && !a.scrambled && !a.escortMissed ? Math.max(0, Math.ceil(a.escortDue)) : null,
                 pc: !!a.predicted,

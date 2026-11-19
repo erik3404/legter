@@ -684,3 +684,31 @@ test('két leszálló gép között nincs jelzés és incidens, csak ütközés 
     sim._checkSeparation();
     assert.ok(a.conflict && d.conflict);
 });
+
+test('megközelítés: a gép a kifutó tengelyén marad (Chicago és Budapest, minden kapuból, minden kifutóra)', () => {
+    for (const icao of ['KORD', 'LHBP']) {
+        const base = makeSim(icao);
+        for (const rw0 of base.runways) {
+            for (let g = 0; g < 6; g++) {
+                const sim = makeSim(icao);
+                sim.aircraft = [];
+                const gates = sim.gates;
+                sim.gates = [gates[g]];
+                const a = sim._spawnArrival();
+                sim.gates = gates;
+                sim.command({ type: 'runway', id: a.id, runway: rw0.index });
+                const rw = sim.runways[rw0.index];
+                let maxCross = 0;
+                for (let i = 0; i < 9000 && sim.aircraft.length; i++) {
+                    sim.step(0.1);
+                    if (a.state === 'final') {
+                        const { along, cross } = sim._alongAndCross(a, rw);
+                        if (along < 4) maxCross = Math.max(maxCross, Math.abs(cross));
+                    }
+                }
+                assert.strictEqual(sim.stats.landed, 1, `${icao} ${sim.runwayName(rw)} kapu ${gates[g].letter}`);
+                assert.ok(maxCross < 0.3, `${icao} ${sim.runwayName(rw)} kapu ${gates[g].letter}: ${maxCross.toFixed(2)} nm eltérés`);
+            }
+        }
+    }
+});

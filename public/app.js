@@ -641,7 +641,7 @@
             <div class="sel-sub">${KIND_NAME[a.k]} · ${c.label}${multiAirport() && a.k !== 'mil' ? ` · reptér: <b>${esc(apCode(a.ap))}</b>` : ''}</div>
             <div class="sel-grid">
                 <div><div class="tb-label">Állapot</div><div style="font-size:13px">${status}</div></div>
-                <div><div class="tb-label">${a.st === 'ground' ? 'Földi idő' : 'Üzemanyag'}</div><div class="v">${fuel}s</div>
+                <div><div class="tb-label">${a.st === 'ground' ? 'Földi idő' : 'Üzemanyag (hátralévő idő)'}</div><div class="v">${fuel} mp · ${fmtTime(fuel)}</div>
                     <div class="fuel-bar"><i class="${pct < 20 ? 'low' : ''}" style="width:${pct}%"></i></div></div>
                 ${alt ? `<div><div class="tb-label">Magasság</div><div class="v">${fl(a.al)}${a.ta !== a.al ? ` → ${fl(a.ta)}` : ''}</div></div>` : ''}
                 <div><div class="tb-label">Sebesség</div><div class="v">${a.s}${a.ts !== a.s ? ` → ${a.ts}` : ''} kt</div></div>
@@ -992,7 +992,10 @@
             const ux = (thr[0] - other[0]) / len;
             const uy = (thr[1] - other[1]) / len;
             const faf = [thr[0] + ux * state.info.fafDistance, thr[1] + uy * state.info.fafDistance];
-            return a.st === 'final' ? [thr] : [faf, thr];
+            // ha rossz irányból jön, előbb a tengely belépési pontjára (FAF + 3 nm) repül
+            const entry = [thr[0] + ux * (state.info.fafDistance + 3), thr[1] + uy * (state.info.fafDistance + 3)];
+            if (a.st === 'final') return [thr];
+            return a.ae && !routeFor(a).length ? [entry, faf, thr] : [faf, thr];
         }
         if (a.eg && !(rules().manualRouting && !a.r.length && a.st !== 'ground')) {
             const g = state.info.gates.find((x) => x.letter === a.eg);
@@ -1731,6 +1734,8 @@
                 line2 = `${a.s}kt`;
             }
             if (a.hd) line2 += ' ⟳';
+            // kijelölt gépnél a hátralévő üzemanyag (idő) is látszik
+            if (state.selected === a.id && a.st !== 'rollout') line2 += `  üa. ${a.f}s`;
             const lines = [line1, line2];
             ctx.font = '11px ui-monospace, monospace';
             const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 10;
