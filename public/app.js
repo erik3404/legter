@@ -925,6 +925,7 @@
 
     // ---------- kifutók ----------
     const runwayLabelHits = [];
+    const runwayStripHits = [];
     const RUNWAY_WIDTH_NM = 0.03;
 
     function drawRunwayDesignator(name, x, y, angle, size) {
@@ -942,6 +943,7 @@
     function drawRunways() {
         if (!state.info || !state.snap) return;
         runwayLabelHits.length = 0;
+        runwayStripHits.length = 0;
         const k = scale();
         const widthPx = Math.max(8, RUNWAY_WIDTH_NM * k * 1.6);
         state.info.runways.forEach((rw, i) => {
@@ -978,6 +980,7 @@
             const px = -ay * widthPx / 2;
             const py = ax * widthPx / 2;
             const angle = Math.atan2(dy, dx);
+            runwayStripHits.push({ index: i, a: sa, b: sb, half: widthPx / 2 });
             ctx.fillStyle = rs.c > 0 ? '#3a2f36' : '#3a4554';
             ctx.strokeStyle = rs.c > 0 ? '#7a4450' : '#59677a';
             ctx.lineWidth = 1;
@@ -1326,6 +1329,28 @@
         return -1;
     }
 
+    // a kifutó előtti szám vagy maga a kifutó a kattintás helyén
+    function runwayAt(sx, sy) {
+        // több találatnál (párhuzamos kifutók) mindig a legközelebbi nyer
+        let best = null;
+        let bestD = 12;
+        for (const h of runwayLabelHits) {
+            const d = Math.hypot(h.x - sx, h.y - sy);
+            if (d < bestD) { bestD = d; best = h.index; }
+        }
+        if (best != null) return best;
+        let bestStrip = Infinity;
+        for (const r of runwayStripHits) {
+            const dx = r.b[0] - r.a[0];
+            const dy = r.b[1] - r.a[1];
+            const len2 = dx * dx + dy * dy;
+            const t = len2 ? Math.max(0, Math.min(1, ((sx - r.a[0]) * dx + (sy - r.a[1]) * dy) / len2)) : 0;
+            const d = Math.hypot(sx - (r.a[0] + t * dx), sy - (r.a[1] + t * dy));
+            if (d < r.half + 3 && d < bestStrip) { bestStrip = d; best = r.index; }
+        }
+        return best;
+    }
+
     function canvasPos(e) {
         const r = canvas.getBoundingClientRect();
         return [e.clientX - r.left, e.clientY - r.top];
@@ -1343,9 +1368,18 @@
         const sel = state.selected != null ? state.acById.get(state.selected) : null;
 
         if (e.shiftKey) {
-            const hit = runwayLabelHits.find((h) => Math.hypot(h.x - sx, h.y - sy) < 11);
+            const hit = runwayLabelHits.reduce((m, h) => { const d = Math.hypot(h.x - sx, h.y - sy); return d < 11 && (!m || d < m.d) ? { index: h.index, d } : m; }, null);
             if (hit) {
                 cmd('flipRunway', { runway: hit.index });
+                return;
+            }
+        }
+
+        // kijelölt gépnél a kifutó számára vagy magára a kifutóra kattintás = kifutó kiosztása
+        if (sel && canControl(sel) && !e.shiftKey && !e.altKey && (sel.st === 'ground' || (sel.k === 'arr' && (sel.st === 'airborne' || sel.st === 'final')))) {
+            const rwHit = runwayAt(sx, sy);
+            if (rwHit != null) {
+                cmd('runway', { id: sel.id, runway: rwHit });
                 return;
             }
         }
@@ -1456,6 +1490,7 @@
         const sel = state.selected != null ? state.acById.get(state.selected) : null;
         let cursor = sel ? 'crosshair' : 'default';
         if (aircraftAt(sx, sy).length) cursor = 'pointer';
+        else if (sel && (sel.st === 'ground' || sel.k === 'arr') && runwayAt(sx, sy) != null) cursor = 'pointer';
         else if (sel && (waypointAt(sel, sx, sy) >= 0 || segmentAt(sel, sx, sy) >= 0)) cursor = 'move';
         canvas.style.cursor = cursor;
     });
