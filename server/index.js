@@ -133,8 +133,8 @@ function createRoom(settings) {
         settings: {
             airport: AIRPORTS[settings.airport] ? settings.airport : 'LOWW',
             mode: Rules.MODES[settings.mode] ? settings.mode : 'free',
-            traffic: ['light', 'normal', 'busy'].includes(settings.traffic) ? settings.traffic : 'normal',
-            sectorOffset: 0
+            sectorOffset: 0,
+            shift: Rules.normalizeShift(settings.shift)
         },
         sim: null,
         paused: false,
@@ -147,8 +147,9 @@ function createRoom(settings) {
 }
 
 function startGame(room) {
-    room.sim = new Sim(room.settings.airport, { traffic: room.settings.traffic });
+    room.sim = new Sim(room.settings.airport, room.settings.shift);
     room.paused = false;
+    room.queued = [];
     broadcast(room, { t: 'static', info: room.sim.staticInfo() });
     broadcast(room, { t: 'log', kind: 'info', text: `Műszak indul: ${room.sim.airport.name}. Az első induló gépek már várnak.` });
     sendRoom(room);
@@ -161,6 +162,12 @@ function tickRoom(room) {
     if (room.tick % BROADCAST_EVERY === 0) {
         broadcast(room, { t: 'state', s: room.sim.snapshot(), ev: room.sim.drainEvents() });
     }
+}
+
+function runCommand(room, player, cmd, reply) {
+    const [ok, text] = room.sim.command(cmd);
+    if (reply) send(player.ws, { t: 'cmdResult', ok, text: ok ? null : text });
+    if (ok && text) broadcast(room, { t: 'log', kind: 'radio', text, by: player.name, color: player.color });
 }
 
 function compactForRules(ac) {
@@ -196,7 +203,7 @@ function handle(ws, msg) {
             if (!isHost) return;
             const s = msg.settings || {};
             if (!room.sim && AIRPORTS[s.airport]) room.settings.airport = s.airport;
-            if (!room.sim && ['light', 'normal', 'busy'].includes(s.traffic)) room.settings.traffic = s.traffic;
+            if (!room.sim && s.shift) room.settings.shift = Rules.normalizeShift(s.shift);
             if (Rules.MODES[s.mode]) room.settings.mode = s.mode;
             if (typeof s.sectorOffset === 'number') room.settings.sectorOffset = ((Math.round(s.sectorOffset) % 360) + 360) % 360;
             sendRoom(room);
@@ -214,12 +221,11 @@ function handle(ws, msg) {
         case 'start':
             if (isHost && !room.sim) startGame(room);
             break;
-        case 'restart':
-            if (isHost) startGame(room);
-            break;
         case 'end':
             if (isHost && room.sim) {
-                broadcast(room, { t: 'ended', stats: room.sim.stats, incidents: room.sim.incidentLog, time: room.sim.time });
+                broadcast(room, {
+                    t: 'ended', stats: room.sim.stats, incidents: room.sim.incidentLog, time: room.sim.time, multiplier: room.sim.multiplier
+                });
                 room.sim = null;
                 sendRoom(room);
             }
@@ -227,6 +233,12 @@ function handle(ws, msg) {
         case 'pause':
             if (isHost) {
                 room.paused = typeof msg.value === 'boolean' ? msg.value : !room.paused;
+                // szünetben gyűjtött parancsok végrehajtása
+                if (!room.paused && room.sim && room.queued.length) {
+                    for (const q of room.queued) runCommand(room, q.player, q.cmd, false);
+                    room.queued = [];
+                    broadcast(room, { t: 'queued', count: 0 });
+                }
                 sendRoom(room);
             }
             break;
@@ -259,9 +271,19 @@ function handle(ws, msg) {
                     });
                 }
             }
-            const [ok, text] = room.sim.command(cmd);
-            send(ws, { t: 'cmdResult', ok, text: ok ? null : text });
-            if (ok && text) broadcast(room, { t: 'log', kind: 'radio', text, by: player.name, color: player.color });
+            if (room.paused && room.sim.rules.pauseQueue) {
+                const last = room.queued[room.queued.length - 1];
+                // húzás közben csak az utolsó helyzet számít
+                if (last && cmd.type === 'moveWaypoint' && last.cmd.type === 'moveWaypoint' && last.cmd.id === cmd.id && last.cmd.index === cmd.index) {
+                    last.cmd = cmd;
+                } else if (room.queued.length < 200) {
+                    room.queued.push({ player, cmd });
+                }
+                send(ws, { t: 'cmdResult', ok: true, text: null, queued: true });
+                broadcast(room, { t: 'queued', count: room.queued.length });
+                return;
+            }
+            runCommand(room, player, cmd, true);
             break;
         }
         default:

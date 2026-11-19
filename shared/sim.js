@@ -4,10 +4,13 @@
 // Magasság lábban, a reptér szintjéhez képest (AGL).
 
 const AIRPORTS = require('./airports.json');
+const Rules = require('./rules');
 
-const AIRSPACE_RADIUS = 18;
+// A légtér egy téglalap, a kapuk a szélein vannak.
+const AIRSPACE = { hw: 24, hh: 14 };
 const GATE_LETTERS = ['A', 'B', 'C', 'D', 'E', 'F'];
-const GATE_BEARINGS = [60, 120, 180, 240, 300, 0];
+// felül és alul középen egy-egy kapu, az oldalakon kettő-kettő
+const GATE_BEARINGS = [72, 108, 180, 252, 288, 0];
 const FAF_DISTANCE = 6;
 const GLIDE_FT_PER_NM = 318;
 // A játék gyorsított időben fut: a mozgás TIME_SCALE-szer gyorsabb a valóságosnál,
@@ -34,9 +37,10 @@ const AIRLINES = [
 
 const ALT = {
     arrivalSpawn: [9000, 11000],
-    arrivalDefault: 6000,
-    departureDefault: 8000,
-    transit: [13000, 17000],
+    approach: 3000,
+    departureInitial: 5000,
+    exitLevels: [10000, 11000, 12000, 13000, 14000],
+    transit: [12000, 16000],
     min: 2000,
     max: 20000
 };
@@ -54,6 +58,9 @@ const SEPARATION = {
     crashNm: 0.3, crashFt: 300
 };
 
+const POINTS = { landed: 10, departed: 8, transited: 6, emergency: 15, incident: -20 };
+const EMERGENCY_TIME = 360;
+
 // ---------- geometria ----------
 const toRad = (d) => d * Math.PI / 180;
 const norm360 = (d) => ((d % 360) + 360) % 360;
@@ -65,6 +72,22 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 const rand = (lo, hi) => lo + Math.random() * (hi - lo);
 const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
 
+// a középpontból adott irányba induló sugár és a légtér szélének metszéspontja
+function edgePoint(brg) {
+    const s = Math.sin(toRad(brg));
+    const c = Math.cos(toRad(brg));
+    const t = Math.min(Math.abs(s) > 1e-6 ? AIRSPACE.hw / Math.abs(s) : Infinity, Math.abs(c) > 1e-6 ? AIRSPACE.hh / Math.abs(c) : Infinity);
+    return [s * t, c * t];
+}
+
+function insideAirspace(x, y, margin = 0) {
+    return Math.abs(x) <= AIRSPACE.hw + margin && Math.abs(y) <= AIRSPACE.hh + margin;
+}
+
+function clampToAirspace(x, y) {
+    return [clamp(x, -AIRSPACE.hw, AIRSPACE.hw), clamp(y, -AIRSPACE.hh, AIRSPACE.hh)];
+}
+
 function pointSegmentDistance(p, a, b) {
     const dx = b[0] - a[0];
     const dy = b[1] - a[1];
@@ -74,46 +97,90 @@ function pointSegmentDistance(p, a, b) {
 }
 
 class Sim {
-    constructor(airportIcao = 'LOWW', options = {}) {
+    constructor(airportIcao = 'LOWW', shift = {}) {
         const ap = AIRPORTS[airportIcao] || AIRPORTS.LOWW;
         this.airport = ap;
-        this.options = Object.assign({ traffic: 'normal' }, options);
+        this.shift = Rules.normalizeShift(shift);
+        this.rules = this.shift.rules;
+        this.multiplier = Rules.scoreMultiplier(this.shift);
         this.time = 0;
         this.aircraft = [];
+        this.storms = [];
         this.events = [];
-        this.stats = { landed: 0, departed: 0, transited: 0, incidents: 0 };
+        this.stats = { landed: 0, departed: 0, transited: 0, incidents: 0, emergencies: 0, base: 0, score: 0 };
         this.incidentLog = [];
         this.nextId = 1;
+        this.nextStormId = 1;
         this.usedCallsigns = new Set();
         this.lossPairs = new Set();
-        this.timers = { arrival: 8, departure: 0, transit: 40 };
+        this.stormHits = new Set();
+        const gentle = this.shift.opening === 'gentle';
+        this.openingArrivals = gentle ? 0 : 3;
+        this.timers = {
+            arrival: gentle ? 20 : 3,
+            departure: gentle ? 70 : 40,
+            transit: gentle ? 90 : 45,
+            storm: rand(100, 160),
+            emergency: rand(200, 300),
+            constraint: rand(240, 360)
+        };
         this.gates = this._buildGates();
         this.runways = ap.runways.map((r, i) => ({
             index: i,
             names: r.names,
             ends: r.ends,
             activeEnd: 0,
-            length: dist(r.ends[0], r.ends[1])
+            length: dist(r.ends[0], r.ends[1]),
+            closingIn: 0,
+            closedFor: 0
         }));
         this._chooseRunwayEndsForWind(rand(0, 360));
-        for (let i = 0; i < 3; i++) this._spawnDeparture();
+        if (this._wants('dep')) {
+            for (let i = 0; i < (gentle ? 1 : 3); i++) this._spawnDeparture();
+        }
+    }
+
+    _wants(kind) {
+        return this.shift.practice === 'all' || this.shift.practice === kind;
     }
 
     // ---------- felépítés ----------
     _buildGates() {
+        let bearings = GATE_BEARINGS;
+        if (this.rules.randomGates) {
+            const count = 4 + Math.floor(Math.random() * 3);
+            const start = rand(0, 360);
+            bearings = Array.from({ length: count }, (_, i) => norm360(start + (i * 360) / count + rand(-12, 12)));
+            bearings.sort((a, b) => a - b);
+        }
         const used = new Set();
-        return GATE_BEARINGS.map((brg, i) => {
-            const pos = fromBearing([0, 0], brg, AIRSPACE_RADIUS);
+        const gates = bearings.map((brg, i) => {
+            const pos = edgePoint(brg);
             let best = null;
             for (const f of this.airport.fixes) {
                 if (used.has(f.name)) continue;
                 const diff = Math.abs(angleDiff(brg, bearing([0, 0], f.pos)));
                 if (diff < 22 && (!best || diff < best.diff)) best = { name: f.name, diff };
             }
-            const name = best ? best.name : `${GATE_LETTERS[i]}GATE`;
+            const name = best ? best.name : `GATE${i + 1}`;
             used.add(name);
-            return { letter: GATE_LETTERS[i], name, bearing: brg, pos };
+            return { letter: '', name, bearing: Math.round(brg), pos: pos.map((v) => Math.round(v * 100) / 100) };
         });
+        // betűk északtól óramutató szerint
+        const order = [...gates].sort((a, b) => norm360(a.bearing - 30) - norm360(b.bearing - 30));
+        order.forEach((g, i) => { g.letter = GATE_LETTERS[i]; });
+        return order;
+    }
+
+    _gate(letter) {
+        return this.gates.find((g) => g.letter === letter);
+    }
+
+    // a kapun túli pont, merőlegesen a légtér szélére: erre célozva a gép biztosan kilép a kapun
+    _gateExitTarget(gate) {
+        const [x, y] = gate.pos;
+        const onSide = Math.abs(Math.abs(x) - AIRSPACE.hw) < 0.05;
+        return onSide ? [x + Math.sign(x) * 3, y] : [x, y + Math.sign(y) * 3];
     }
 
     _chooseRunwayEndsForWind(windFrom) {
@@ -135,6 +202,10 @@ class Sim {
 
     runwayName(rw, end = rw.activeEnd) {
         return rw.names[end];
+    }
+
+    runwayOpen(rw) {
+        return rw.closedFor <= 0;
     }
 
     // ---------- forgalom ----------
@@ -179,6 +250,7 @@ class Sim {
             cruise: c.cruise,
             alt: 0,
             targetAlt: 0,
+            exitAlt: 0,
             route: [],
             runway: null,
             exitGate: null,
@@ -188,12 +260,22 @@ class Sim {
             fuel: 0,
             groundFuel: 0,
             conflict: false,
+            emergency: false,
+            emergencyLeft: 0,
             spawnedAt: this.time
         };
     }
 
     _gateClear(gate) {
-        return !this.aircraft.some((a) => a.state === 'airborne' && dist([a.x, a.y], gate.pos) < 5);
+        return !this.aircraft.some((a) => a.state === 'airborne' && dist([a.x, a.y], gate.pos) < 5)
+            && !this.storms.some((s) => dist([s.x, s.y], gate.pos) < s.r * 0.9);
+    }
+
+    _enterAt(a, gate) {
+        const inward = fromBearing(gate.pos, norm360(gate.bearing + 180), 0.5);
+        a.x = inward[0];
+        a.y = inward[1];
+        a.entryGate = gate.letter;
     }
 
     _spawnArrival() {
@@ -201,16 +283,13 @@ class Sim {
         if (!gates.length) return null;
         const gate = pick(gates);
         const a = this._base('arr');
-        const inward = fromBearing(gate.pos, norm360(gate.bearing + 180), 0.5);
-        a.x = inward[0];
-        a.y = inward[1];
+        this._enterAt(a, gate);
         a.hdg = norm360(gate.bearing + 180 + rand(-15, 15));
         a.alt = Math.round(rand(...ALT.arrivalSpawn) / 1000) * 1000;
-        a.targetAlt = ALT.arrivalDefault;
-        a.entryGate = gate.letter;
+        a.targetAlt = this.rules.altitude ? a.alt : ALT.approach;
         a.fuel = FUEL.arrival * (a.cls === 'turboprop' ? 0.85 : 1);
         this.aircraft.push(a);
-        this._event('info', `${a.callsign} belépett ${gate.letter} (${gate.name}) felől, leszállásra vár.`, a.id);
+        this._event('info', `${a.callsign} belépett ${gate.letter} (${gate.name}) felől, leszállásra vár.`, a.id, 'arrival');
         return a;
     }
 
@@ -218,20 +297,18 @@ class Sim {
         const gates = this.gates.filter((g) => this._gateClear(g));
         if (!gates.length) return null;
         const entry = pick(gates);
-        const exits = this.gates.filter((g) => Math.abs(angleDiff(g.bearing, entry.bearing)) >= 100);
-        const exit = pick(exits);
+        const exits = this.gates.filter((g) => Math.abs(angleDiff(g.bearing, entry.bearing)) >= 90);
+        const exit = pick(exits.length ? exits : this.gates.filter((g) => g !== entry));
         const a = this._base('transit');
-        const inward = fromBearing(entry.pos, norm360(entry.bearing + 180), 0.5);
-        a.x = inward[0];
-        a.y = inward[1];
-        a.hdg = bearing(inward, exit.pos);
+        this._enterAt(a, entry);
+        a.hdg = this.rules.manualRouting ? norm360(entry.bearing + 180 + rand(-10, 10)) : bearing([a.x, a.y], exit.pos);
         a.alt = Math.round(rand(...ALT.transit) / 1000) * 1000;
         a.targetAlt = a.alt;
-        a.entryGate = entry.letter;
+        a.exitAlt = this.rules.altitude ? pick(ALT.exitLevels.filter((l) => l !== a.alt)) : 0;
         a.exitGate = exit.letter;
         a.fuel = FUEL.transit;
         this.aircraft.push(a);
-        this._event('info', `${a.callsign} átrepülő: ${entry.letter} → ${exit.letter}.`, a.id);
+        this._event('info', `${a.callsign} átrepülő: ${entry.letter} → ${exit.letter}${a.exitAlt ? `, kilépés ${a.exitAlt / 100} szinten` : ''}.`, a.id, 'transit');
         return a;
     }
 
@@ -242,58 +319,76 @@ class Sim {
         a.spd = 0;
         a.targetSpd = 0;
         a.alt = 0;
-        a.targetAlt = ALT.departureDefault;
+        a.exitAlt = this.rules.altitude ? pick(ALT.exitLevels) : 0;
+        a.targetAlt = this.rules.altitude ? ALT.departureInitial : 10000;
         a.exitGate = gate.letter;
         a.groundFuel = FUEL.departureGround;
         a.fuel = FUEL.departureAir;
         a.runway = this._bestRunwayFor(gate.pos);
         this.aircraft.push(a);
+        this._event('dep', `${a.callsign} felszállásra kész: ${this.runwayName(this.runways[a.runway])}, kijárat ${gate.letter}.`, a.id, 'depReady');
         return a;
     }
 
     _bestRunwayFor(pos) {
         const target = bearing([0, 0], pos);
-        let best = 0;
+        let best = null;
         let bestDiff = 999;
         for (const rw of this.runways) {
+            if (!this.runwayOpen(rw) || rw.closingIn > 0) continue;
             const diff = Math.abs(angleDiff(this.landingHeading(rw), target));
             if (diff < bestDiff) { bestDiff = diff; best = rw.index; }
         }
-        return best;
+        return best == null ? 0 : best;
     }
 
     _trafficLevel() {
-        const minutes = this.time / 60;
-        const factor = { light: 1.5, normal: 1, busy: 0.7 }[this.options.traffic] || 1;
+        const minutes = this.time / 60 - (this.shift.opening === 'gentle' ? 4 : 0);
+        const factor = 1 / (this.shift.traffic / 100);
         return {
-            arrival: Math.max(28, 55 - minutes * 1.5) * factor,
-            departure: Math.max(32, 60 - minutes * 1.2) * factor,
-            transit: Math.max(60, 110 - minutes * 2) * factor
+            arrival: clamp(55 - minutes * 1.5, 28, 70) * factor,
+            departure: clamp(60 - minutes * 1.2, 32, 80) * factor,
+            transit: clamp(110 - minutes * 2, 60, 140) * factor
         };
     }
 
     _spawnTick(dt) {
         const level = this._trafficLevel();
+        const kinds = { arrival: 'arr', departure: 'dep', transit: 'transit' };
         for (const key of ['arrival', 'departure', 'transit']) {
+            if (!this._wants(kinds[key])) continue;
             this.timers[key] -= dt;
             if (this.timers[key] > 0) continue;
             let ok;
             if (key === 'arrival') ok = this._spawnArrival();
             else if (key === 'transit') ok = this._spawnTransit();
             else ok = this.aircraft.filter((a) => a.state === 'ground').length < 6 ? this._spawnDeparture() : true;
-            this.timers[key] = ok ? level[key] * rand(0.8, 1.2) : 5;
+            if (ok && key === 'arrival' && this.openingArrivals > 0) {
+                this.openingArrivals -= 1;
+                this.timers[key] = rand(10, 13);
+            } else {
+                this.timers[key] = ok ? level[key] * rand(0.8, 1.2) : 5;
+            }
         }
     }
 
     // ---------- események ----------
-    _event(kind, text, aircraftId = null) {
-        this.events.push({ t: Math.round(this.time), kind, text, aircraftId });
+    // sound: a kliens melyik hangot játssza le (arrival, transit, depReady, good, incident, emergency, warn)
+    _event(kind, text, aircraftId = null, sound = null) {
+        this.events.push({ t: Math.round(this.time), kind, text, aircraftId, sound });
     }
 
-    _incident(a, reason) {
+    _addPoints(p) {
+        this.stats.base += p;
+        this.stats.score = Math.round(this.stats.base * this.multiplier);
+    }
+
+    _incident(a, reason, callsign) {
         this.stats.incidents += 1;
-        this.incidentLog.push({ t: Math.round(this.time), callsign: a ? a.callsign : '', reason });
-        this._event('incident', `INCIDENS: ${a ? `${a.callsign} – ` : ''}${reason}`, a ? a.id : null);
+        this._addPoints(POINTS.incident);
+        const cs = callsign || (a ? a.callsign : '');
+        this.incidentLog.push({ t: Math.round(this.time), callsign: cs, reason });
+        this._event('incident', `INCIDENS: ${cs ? `${cs} – ` : ''}${reason}`, a ? a.id : null, 'incident');
     }
 
     _remove(a) {
@@ -347,13 +442,14 @@ class Sim {
             const rw = this.runways[a.runway];
             return fromBearing(this.threshold(rw), norm360(this.landingHeading(rw) + 180), FAF_DISTANCE);
         }
-        if (a.exitGate) return this.gates.find((g) => g.letter === a.exitGate).pos;
+        if (a.exitGate) return this._gate(a.exitGate).pos;
         return null;
     }
 
     _cmdAddWaypoint(a, { x, y, index }) {
-        if (!a || a.state === 'rollout') return [false, 'Ennek a gépnek most nem adható útpont.'];
-        const p = [clamp(x, -AIRSPACE_RADIUS, AIRSPACE_RADIUS), clamp(y, -AIRSPACE_RADIUS, AIRSPACE_RADIUS)];
+        if (!a || a.state === 'rollout' || a.state === 'ground') return [false, 'Ennek a gépnek most nem adható útpont.'];
+        if (!Number.isFinite(x) || !Number.isFinite(y)) return [false, null];
+        const p = clampToAirspace(x, y);
         if (a.state === 'final') a.state = 'airborne';
         if (typeof index === 'number') {
             a.route.splice(clamp(index, 0, a.route.length), 0, p);
@@ -371,13 +467,14 @@ class Sim {
             if (!end) bestIdx = a.route.length;
             a.route.splice(bestIdx, 0, p);
         }
+        if (a.route.length > 12) a.route.length = 12;
         a.hold = false;
         return [true, null];
     }
 
     _cmdMoveWaypoint(a, { index, x, y }) {
-        if (!a || !a.route[index]) return [false, null];
-        a.route[index] = [clamp(x, -AIRSPACE_RADIUS, AIRSPACE_RADIUS), clamp(y, -AIRSPACE_RADIUS, AIRSPACE_RADIUS)];
+        if (!a || !a.route[index] || !Number.isFinite(x) || !Number.isFinite(y)) return [false, null];
+        a.route[index] = clampToAirspace(x, y);
         return [true, null];
     }
 
@@ -388,9 +485,9 @@ class Sim {
     }
 
     _cmdReplaceRoute(a, { x, y }) {
-        if (!a || a.state === 'rollout') return [false, null];
+        if (!a || a.state === 'rollout' || a.state === 'ground' || !Number.isFinite(x) || !Number.isFinite(y)) return [false, null];
         if (a.state === 'final') a.state = 'airborne';
-        a.route = [[x, y]];
+        a.route = [clampToAirspace(x, y)];
         a.hold = false;
         return [true, null];
     }
@@ -399,6 +496,7 @@ class Sim {
         if (!a) return [false, 'Nincs kijelölt gép.'];
         const rw = this.runways[runway];
         if (!rw) return [false, 'Nincs ilyen kifutó.'];
+        if (!this.runwayOpen(rw)) return [false, `${this.runwayName(rw)} le van zárva.`];
         if (a.kind === 'transit') return [false, `${a.callsign} átrepülő, nem száll le.`];
         if (a.kind === 'dep') {
             if (a.state !== 'ground') return [false, `${a.callsign} már a levegőben van.`];
@@ -408,14 +506,15 @@ class Sim {
         if (a.state === 'rollout') return [false, null];
         a.runway = runway;
         if (a.state === 'final') a.state = 'airborne';
-        // a megközelítéshez automatikusan süllyed (a játékos utána módosíthatja)
-        if (a.targetAlt > 3000) a.targetAlt = 3000;
+        // magasság nélküli játékban automatikusan süllyed a megközelítéshez
+        if (!this.rules.altitude && a.targetAlt > ALT.approach) a.targetAlt = ALT.approach;
         return [true, `${a.callsign} leszállásra engedélyezve: ${this.runwayName(rw)}.`];
     }
 
     _cmdTakeoff(a) {
         if (!a || a.kind !== 'dep' || a.state !== 'ground') return [false, 'Csak földön váró induló szállhat fel.'];
         const rw = this.runways[a.runway];
+        if (!this.runwayOpen(rw)) return [false, `${this.runwayName(rw)} le van zárva, válassz másik kifutót.`];
         if (this.runwayBusy(a.runway)) return [false, `${this.runwayName(rw)} foglalt, ${a.callsign} vár.`];
         const thr = this.threshold(rw);
         a.state = 'takeoff';
@@ -449,16 +548,17 @@ class Sim {
         if (to === 'max') a.targetSpd = hi;
         else if (to === 'min') a.targetSpd = lo;
         else if (to === 'reset') a.targetSpd = a.cruise;
-        else a.targetSpd = clamp(a.targetSpd + (delta || 0), lo, hi);
+        else a.targetSpd = clamp(a.targetSpd + (Number(delta) || 0), lo, hi);
         return [true, null];
     }
 
     _cmdAltitude(a, { delta, to }) {
-        if (!this._isAirborneControllable(a) || a.state === 'final') return [false, 'A magasság most automatikus.'];
+        if (!this.rules.altitude) return [false, 'A magasság ebben a műszakban automatikus (Szabályok → Magasság).'];
+        if (!a || !(a.state === 'airborne' || a.state === 'takeoff')) return [false, 'A magasság most automatikus.'];
         const max = a.kind === 'arr' ? 12000 : ALT.max;
         if (to === 'max') a.targetAlt = max;
-        else if (to === 'min') a.targetAlt = ALT.min + (a.kind === 'arr' ? 1000 : 2000);
-        else a.targetAlt = clamp(a.targetAlt + (delta || 0), ALT.min, max);
+        else if (to === 'min') a.targetAlt = ALT.min;
+        else a.targetAlt = clamp(a.targetAlt + (Number(delta) || 0), ALT.min, max);
         return [true, null];
     }
 
@@ -484,8 +584,8 @@ class Sim {
         const p2 = fromBearing(p1, norm360(hdg + 90), 4);
         const p3 = fromBearing(fromBearing(this.threshold(rw), norm360(hdg + 180), 11), norm360(hdg + 90), 4);
         a.state = 'airborne';
-        a.route = [p1, p2, p3];
-        a.targetAlt = 3000;
+        a.route = [p1, p2, p3].map((p) => clampToAirspace(p[0], p[1]));
+        a.targetAlt = ALT.approach;
         a.targetSpd = a.cruise;
         a.hold = false;
         this._event('warn', `${a.callsign} átstartol (${reason}).`, a.id);
@@ -495,10 +595,139 @@ class Sim {
     step(dt) {
         this.time += dt;
         this._spawnTick(dt);
+        if (this.rules.storms) this._stormTick(dt);
+        if (this.rules.emergencies) this._emergencyTick(dt);
+        if (this.rules.constraints) this._constraintTick(dt);
+        this._runwayTick(dt);
         for (const a of [...this.aircraft]) this._updateAircraft(a, dt);
         this._checkSeparation();
+        this._checkStorms();
     }
 
+    // ---------- zivatarok ----------
+    _stormTick(dt) {
+        this.timers.storm -= dt;
+        if (this.timers.storm <= 0 && this.storms.length < 2) {
+            this.timers.storm = rand(240, 420);
+            const brg = rand(0, 360);
+            const start = edgePoint(brg);
+            const r = rand(3.5, 5.5);
+            const pos = fromBearing(start, brg, r * 0.6);
+            const heading = norm360(brg + 180 + rand(-40, 40));
+            this.storms.push({
+                id: this.nextStormId++,
+                x: pos[0], y: pos[1],
+                r,
+                hdg: heading,
+                spd: rand(0.012, 0.025), // nm/s
+                age: 0,
+                life: rand(700, 1200),
+                turnIn: rand(60, 150)
+            });
+            this._event('warn', 'Zivatar közeledik a légtér szélén. Kerüld a piros magot!', null, 'warn');
+        }
+        for (const s of this.storms) {
+            s.age += dt;
+            s.turnIn -= dt;
+            if (s.turnIn <= 0) {
+                s.turnIn = rand(60, 150);
+                s.hdg = norm360(s.hdg + rand(-35, 35));
+                s.spd = clamp(s.spd * rand(0.7, 1.3), 0.008, 0.03);
+            }
+            s.x += Math.sin(toRad(s.hdg)) * s.spd * dt;
+            s.y += Math.cos(toRad(s.hdg)) * s.spd * dt;
+        }
+        this.storms = this.storms.filter((s) => s.age < s.life && insideAirspace(s.x, s.y, s.r + 2));
+    }
+
+    // a mag a zivatar életének végén eltűnik
+    _stormCore(s) {
+        const fade = s.age / s.life;
+        if (fade > 0.85) return 0;
+        return s.r * 0.32;
+    }
+
+    _checkStorms() {
+        if (!this.storms.length) return;
+        for (const a of this.aircraft) {
+            if (a.state !== 'airborne' && a.state !== 'final') continue;
+            for (const s of this.storms) {
+                const core = this._stormCore(s);
+                const key = `${a.id}-${s.id}`;
+                if (core > 0 && dist([a.x, a.y], [s.x, s.y]) < core) {
+                    if (!this.stormHits.has(key)) {
+                        this.stormHits.add(key);
+                        this._incident(a, 'berepült a zivatar piros magjába');
+                    }
+                }
+            }
+        }
+    }
+
+    // ---------- vészhelyzetek ----------
+    _emergencyTick(dt) {
+        this.timers.emergency -= dt;
+        if (this.timers.emergency > 0) return;
+        this.timers.emergency = rand(300, 480);
+        const candidates = this.aircraft.filter((a) => a.kind === 'arr' && a.state === 'airborne' && !a.emergency && a.fuel > 200);
+        if (!candidates.length) {
+            this.timers.emergency = 30;
+            return;
+        }
+        const a = pick(candidates);
+        a.emergency = true;
+        a.emergencyLeft = EMERGENCY_TIME;
+        a.cruise = Math.round(a.cruise * 0.8);
+        a.targetSpd = Math.min(a.targetSpd, a.cruise);
+        a.fuel = Math.max(a.fuel, EMERGENCY_TIME + 60);
+        this._event('incident', `VÉSZHELYZET: ${a.callsign} – 6 percen belül le kell szállnia!`, a.id, 'emergency');
+    }
+
+    // ---------- kifutó-ellenőrzések ----------
+    _constraintTick(dt) {
+        this.timers.constraint -= dt;
+        if (this.timers.constraint > 0) return;
+        this.timers.constraint = rand(360, 540);
+        const open = this.runways.filter((r) => this.runwayOpen(r) && r.closingIn <= 0);
+        if (open.length < 2) return;
+        const rw = pick(open);
+        rw.closingIn = 60;
+        this._event('warn', `${this.runwayName(rw)} kifutó 60 másodperc múlva ellenőrzés miatt lezár.`, null, 'warn');
+    }
+
+    _runwayTick(dt) {
+        for (const rw of this.runways) {
+            if (rw.closingIn > 0) {
+                rw.closingIn -= dt;
+                if (rw.closingIn <= 0) {
+                    rw.closingIn = 0;
+                    rw.closedFor = rand(150, 240);
+                    this._closeRunway(rw);
+                }
+            } else if (rw.closedFor > 0) {
+                rw.closedFor -= dt;
+                if (rw.closedFor <= 0) {
+                    rw.closedFor = 0;
+                    this._event('good', `${this.runwayName(rw)} kifutó újra nyitva.`);
+                }
+            }
+        }
+    }
+
+    _closeRunway(rw) {
+        this._event('warn', `${this.runwayName(rw)} kifutó lezárva. A rá tartó érkezők új kifutót kérnek.`);
+        for (const a of this.aircraft) {
+            if (a.runway !== rw.index) continue;
+            if (a.kind === 'arr' && (a.state === 'airborne' || a.state === 'final')) {
+                a.runway = null;
+                a.state = 'airborne';
+            } else if (a.kind === 'dep' && a.state === 'ground') {
+                a.runway = this._bestRunwayFor(this._gate(a.exitGate).pos);
+            }
+        }
+    }
+
+    // ---------- mozgás ----------
     _turnToward(a, targetHdg, dt) {
         const diff = angleDiff(a.hdg, targetHdg);
         const maxTurn = TURN_RATE * dt;
@@ -532,7 +761,7 @@ class Sim {
             a.spd = Math.min(a.cruise, a.spd + 6 * TIME_SCALE * dt);
             if (a.spd > 140) a.alt = Math.min(a.targetAlt, a.alt + CLIMB_RATE * dt);
             this._move(a, dt);
-            if (a.alt > 0 && dist([a.x, a.y], a.takeoffEnd) < 0.2 + a.spd * KT_TO_NMPS * dt) {
+            if (a.alt > 0 && !a.climbOutUntil && dist([a.x, a.y], a.takeoffEnd) < 0.2 + a.spd * KT_TO_NMPS * dt) {
                 // egyenes emelkedés a kifutó vége után még 1 nm-ig
                 a.climbOutUntil = fromBearing(a.takeoffEnd, a.hdg, 1);
             }
@@ -550,7 +779,12 @@ class Sim {
             a.rollTime = (a.rollTime || 0) + dt;
             if (a.rollTime > 14 || dist([a.x, a.y], a.rollEnd) < 0.15) {
                 this.stats.landed += 1;
-                this._event('good', `${a.callsign} leszállt.`, a.id);
+                this._addPoints(POINTS.landed);
+                if (a.emergency) {
+                    this.stats.emergencies += 1;
+                    if (a.emergencyLeft > 0) this._addPoints(POINTS.emergency);
+                }
+                this._event('good', `${a.callsign} leszállt.`, a.id, 'good');
                 this._remove(a);
             }
             return;
@@ -558,6 +792,10 @@ class Sim {
 
         // levegőben
         a.fuel -= dt;
+        if (a.emergency && a.emergencyLeft > 0) {
+            a.emergencyLeft -= dt;
+            if (a.emergencyLeft <= 0) this._incident(a, 'a vészhelyzetben lévő gép nem szállt le időben');
+        }
         if (a.fuel <= 0) {
             this._incident(a, 'kifogyott az üzemanyag-tartalék, kitérő reptérre ment');
             this._remove(a);
@@ -577,6 +815,8 @@ class Sim {
             if (dist([a.x, a.y], target) < 0.6) {
                 a.route.shift();
                 target = a.route[0] || null;
+                // kézi útvonalnál az utolsó útpont után a kapu felé fordul
+                if (!target && a.exitGate && this.rules.manualRouting) a.routedToGate = true;
             }
         }
         if (!a.hold && !target) {
@@ -592,23 +832,35 @@ class Sim {
                     // FAF elérve, de rossz szögben: rávezetjük a tengelyre
                     target = fromBearing(this.threshold(rw), norm360(this.landingHeading(rw) + 180), FAF_DISTANCE - 3);
                 }
-            } else if (a.exitGate) {
-                target = this.gates.find((g) => g.letter === a.exitGate).pos;
+            } else if (a.exitGate && (!this.rules.manualRouting || a.routedToGate)) {
+                const gate = this._gate(a.exitGate);
+                // messziről a kapura, közelről a kapun túli pontra célzunk
+                target = dist([a.x, a.y], gate.pos) > 3 ? gate.pos : this._gateExitTarget(gate);
             }
         }
         if (target) this._turnToward(a, bearing([a.x, a.y], target), dt);
+        // magasság nélküli játékban az indulók és átrepülők maguktól a kilépési szintre emelkednek
+        if (!this.rules.altitude && a.kind !== 'arr') a.targetAlt = Math.max(a.targetAlt, 10000);
         this._approachSpeedAndAlt(a, dt);
         this._move(a, dt);
 
         // kilépés a légtérből
-        const r = Math.hypot(a.x, a.y);
-        if (r > AIRSPACE_RADIUS + 0.5) {
+        if (!insideAirspace(a.x, a.y, 0.5)) {
             if ((a.kind === 'dep' || a.kind === 'transit') && a.exitGate) {
-                const gate = this.gates.find((g) => g.letter === a.exitGate);
+                const gate = this._gate(a.exitGate);
                 if (dist([a.x, a.y], gate.pos) < 4) {
-                    if (a.kind === 'dep') this.stats.departed += 1;
-                    else this.stats.transited += 1;
-                    this._event('good', `${a.callsign} átadva ${gate.letter} (${gate.name}) kapun.`, a.id);
+                    if (a.exitAlt && Math.abs(a.alt - a.exitAlt) > 600) {
+                        this._incident(a, `rossz magasságon lépett ki (${Math.round(a.alt / 100)} helyett ${a.exitAlt / 100})`);
+                    } else {
+                        if (a.kind === 'dep') {
+                            this.stats.departed += 1;
+                            this._addPoints(POINTS.departed);
+                        } else {
+                            this.stats.transited += 1;
+                            this._addPoints(POINTS.transited);
+                        }
+                        this._event('good', `${a.callsign} átadva ${gate.letter} (${gate.name}) kapun.`, a.id, 'good');
+                    }
                 } else {
                     this._incident(a, `rossz helyen hagyta el a légteret (cél: ${gate.letter})`);
                 }
@@ -676,29 +928,29 @@ class Sim {
         for (const a of this.aircraft) a.conflict = false;
         const activePairs = new Set();
         const crashed = new Set();
+        const useAlt = this.rules.altitude;
         for (let i = 0; i < air.length; i++) {
             for (let j = i + 1; j < air.length; j++) {
                 const a = air[i];
                 const b = air[j];
                 const d = dist([a.x, a.y], [b.x, b.y]);
-                const v = Math.abs(a.alt - b.alt);
-                if (d < SEPARATION.warnNm && v < SEPARATION.warnFt) {
-                    // két gép ugyanarra a kifutóra a végső megközelítésen 2 nm-nél közelebb is lehet egymás mögött
-                    const sameFinal = a.state === 'final' && b.state === 'final' && a.runway === b.runway;
-                    if (sameFinal && d > 1.0) continue;
-                    a.conflict = true;
-                    b.conflict = true;
-                    const key = `${Math.min(a.id, b.id)}-${Math.max(a.id, b.id)}`;
-                    if (d < SEPARATION.crashNm && v < SEPARATION.crashFt) {
-                        crashed.add(a);
-                        crashed.add(b);
-                        this._incident(a, `ütközött: ${b.callsign}`);
-                        this.stats.incidents += 1;
-                        this.incidentLog.push({ t: Math.round(this.time), callsign: b.callsign, reason: `ütközött: ${a.callsign}` });
-                    } else if (d < SEPARATION.lossNm && v < SEPARATION.lossFt) {
-                        activePairs.add(key);
-                        if (!this.lossPairs.has(key)) this._incident(a, `elkülönítés elveszett ${b.callsign} géppel`);
-                    }
+                if (d >= SEPARATION.warnNm) continue;
+                const v = useAlt ? Math.abs(a.alt - b.alt) : 0;
+                if (v >= SEPARATION.warnFt) continue;
+                // két gép ugyanarra a kifutóra a végső megközelítésen 3 nm-nél közelebb is lehet egymás mögött
+                const sameFinal = a.state === 'final' && b.state === 'final' && a.runway === b.runway;
+                if (sameFinal && d > 1.0) continue;
+                a.conflict = true;
+                b.conflict = true;
+                const key = `${Math.min(a.id, b.id)}-${Math.max(a.id, b.id)}`;
+                if (d < SEPARATION.crashNm && v < SEPARATION.crashFt) {
+                    crashed.add(a);
+                    crashed.add(b);
+                    this._incident(a, `ütközött: ${b.callsign}`);
+                    this._incident(b, `ütközött: ${a.callsign}`);
+                } else if (d < SEPARATION.lossNm && v < SEPARATION.lossFt) {
+                    activePairs.add(key);
+                    if (!this.lossPairs.has(key)) this._incident(a, `elkülönítés elveszett ${b.callsign} géppel`);
                 }
             }
         }
@@ -708,6 +960,7 @@ class Sim {
 
     // ---------- kimenet ----------
     snapshot() {
+        const r1 = (v) => Math.round(v * 10) / 10;
         return {
             t: Math.round(this.time * 10) / 10,
             stats: this.stats,
@@ -718,11 +971,12 @@ class Sim {
                 c: a.cls,
                 x: Math.round(a.x * 1000) / 1000,
                 y: Math.round(a.y * 1000) / 1000,
-                h: Math.round(a.hdg),
+                h: Math.round(a.hdg * 10) / 10,
                 s: Math.round(a.spd),
                 ts: Math.round(a.targetSpd),
                 al: Math.round(a.alt),
                 ta: Math.round(a.targetAlt),
+                xa: a.exitAlt,
                 st: a.state,
                 rw: a.runway,
                 eg: a.exitGate,
@@ -731,9 +985,11 @@ class Sim {
                 hd: a.hold,
                 f: Math.round(a.fuel),
                 gf: Math.round(a.groundFuel),
-                cf: a.conflict
+                cf: a.conflict,
+                em: a.emergency ? Math.max(0, Math.round(a.emergencyLeft)) : null
             })),
-            runways: this.runways.map((r) => r.activeEnd)
+            runways: this.runways.map((r) => ({ e: r.activeEnd, w: Math.ceil(r.closingIn), c: Math.ceil(r.closedFor) })),
+            storms: this.storms.map((s) => ({ id: s.id, x: Math.round(s.x * 100) / 100, y: Math.round(s.y * 100) / 100, r: r1(s.r), core: r1(this._stormCore(s)), h: Math.round(s.hdg) }))
         };
     }
 
@@ -741,12 +997,15 @@ class Sim {
         return {
             icao: this.airport.icao,
             name: this.airport.name,
-            radius: AIRSPACE_RADIUS,
+            airspace: AIRSPACE,
+            timeScale: TIME_SCALE,
             fafDistance: FAF_DISTANCE,
             windFrom: this.windFrom,
             gates: this.gates,
             runways: this.runways.map((r) => ({ index: r.index, names: r.names, ends: r.ends })),
-            classes: CLASSES
+            classes: CLASSES,
+            shift: this.shift,
+            multiplier: this.multiplier
         };
     }
 
@@ -760,7 +1019,8 @@ class Sim {
 module.exports = {
     Sim,
     AIRPORTS,
-    AIRSPACE_RADIUS,
+    AIRSPACE,
     CLASSES,
-    geometry: { bearing, dist, fromBearing, angleDiff, pointSegmentDistance }
+    TIME_SCALE,
+    geometry: { bearing, dist, fromBearing, angleDiff, pointSegmentDistance, edgePoint, insideAirspace }
 };

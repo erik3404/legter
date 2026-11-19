@@ -47,6 +47,33 @@ Bármilyen más Node-tárhelyen is fut: a `PORT` környezeti változón figyel, 
 A szobagazda választja a repteret, a módot és a forgalmat, és ő indítja a műszakot. A többiek a 4 betűs
 szobakóddal vagy a megosztott linkkel lépnek be.
 
+## Műszak-beállítások
+
+Indítás előtt a szobagazda kiválasztja a repteret és a szabályokat. A **Klasszikus** és a **Nehéz** előre beállított
+csomag, bármelyik kapcsoló átállításával **Egyéni** lesz. Minden szabálynak saját pontszorzója van:
+
+| Szabály | Ki | Be |
+| --- | --- | --- |
+| Magasság (süllyesztés, emelés, kilépési szint) | ×1.00 | ×1.20 |
+| Indulók és átrepülők útvonala kézzel | ×1.00 | ×1.20 |
+| Szünetben a parancsok várnak | ×1.00 | ×1.05 |
+| Véletlen kapuk (4–6) | ×1.00 | ×1.10 |
+| Kifutó-ellenőrzések (ideiglenes lezárás) | ×0.90 | ×1.00 |
+| Vészhelyzetek (6 percen belül le kell szállni) | ×0.95 | ×1.00 |
+| Zivatarok (a piros mag incidens) | ×0.90 | ×1.00 |
+| Minden útvonal látszik | ×1.00 | ×0.60 |
+
+A forgalom 50–150% lehet (×0.50–×1.50). Van gyakorló mód (csak érkezők, indulók vagy átrepülők), és kétféle kezdés.
+
+## Hangjelzések
+
+- felfelé lépő csengő + felugró értesítés: új induló vár (40 mp-enként emlékeztet, ha sokáig vár)
+- rövid pitty: érkező lép be · két mély pitty: átrepülő
+- gyors dupla sípolás: két gép túl közel
+- ding: sikeres leszállás vagy kilépés · mély zúgás: incidens · sziréna: vészhelyzet
+
+Csak azokról a gépekről szól, amelyeket te irányíthatsz. A 🔊 gombbal halkítható vagy kikapcsolható.
+
 ## Irányítás
 
 | Billentyű | Funkció |
@@ -61,7 +88,7 @@ szobakóddal vagy a megosztott linkkel lépnek be.
 | R | várakozó körözés |
 | G | átstartolás |
 | W / S | sebesség ±10 csomó (Shift: max/min) |
-| C / D, ↑ / ↓ | magasság ±1000 láb (Shift: max/min) |
+| C / D, ↑ / ↓ | magasság ±1000 láb (Shift: max/min), ha a Magasság szabály be van kapcsolva |
 | Tab, N | következő induló / légtérben lévő gép |
 | Szóköz | szünet (szobagazda) |
 

@@ -23,11 +23,13 @@
             <div class="tb-value mono" id="tb-clock">00:00</div>
         </div>
         <div class="tb-stats">
+            <span class="stat score-c" title="Pontszám (a szorzóval együtt)"><b id="st-score">0</b> pont <small id="st-mult" class="mono"></small></span>
             <span class="stat arr-c" title="Leszállt"><b id="st-landed">0</b> leszállt</span>
             <span class="stat dep-c" title="Felszállt és kilépett"><b id="st-departed">0</b> felszállt</span>
             <span class="stat tr-c" title="Átrepült"><b id="st-transited">0</b> átrepült</span>
             <span class="stat bad-c" title="Incidensek"><b id="st-incidents">0</b> incidens</span>
         </div>
+        <span id="queued"></span>
         <div class="tb-spacer"></div>
         <div class="tb-controls">
             <div class="seg" id="speed-seg">
@@ -38,6 +40,7 @@
             </div>
             <button id="btn-pause" class="btn">Szünet</button>
             <button id="btn-end" class="btn ghost">Műszak vége</button>
+            <button id="btn-sound" class="btn ghost" title="Hangjelzések: be / halk / ki">🔊</button>
             <button id="btn-help" class="btn ghost" title="Irányítás (?)">?</button>
         </div>
     </header>
@@ -46,6 +49,7 @@
         <div id="scope-wrap">
             <canvas id="scope"></canvas>
             <div id="wind" class="mono"></div>
+            <div id="toast" hidden></div>
             <div class="map-credit">Térkép: Natural Earth · reptéradatok: openScope</div>
         </div>
         <aside id="sidebar">
@@ -82,74 +86,80 @@
 
 <!-- Lobby -->
 <div id="lobby" class="overlay">
-    <div class="dialog">
+    <div class="dialog" id="lobby-start">
         <div class="kicker">Többjátékos légiirányítás</div>
         <h1><span class="brand-mark">◎</span> Légtér</h1>
-        <div id="lobby-start">
-            <label class="field">Neved
-                <input id="in-name" maxlength="16" placeholder="pl. Erik">
-            </label>
-            <div class="grid2">
-                <label class="field">Reptér
-                    <select id="in-airport"></select>
-                </label>
-                <label class="field">Forgalom
-                    <select id="in-traffic">
-                        <option value="light">Nyugodt</option>
-                        <option value="normal" selected>Normál</option>
-                        <option value="busy">Csúcsidő</option>
-                    </select>
-                </label>
-            </div>
-            <label class="field">Multi mód
-                <select id="in-mode"></select>
-            </label>
-            <p class="hint" id="mode-desc"></p>
-            <div class="row">
-                <button id="btn-solo" class="btn primary">Egyedül játszom</button>
-                <button id="btn-create" class="btn">Szoba létrehozása</button>
-            </div>
-            <div class="divider"><span>vagy csatlakozz</span></div>
-            <div class="row">
-                <input id="in-code" class="mono code-input" maxlength="4" placeholder="KÓD">
-                <button id="btn-join" class="btn">Csatlakozás</button>
-            </div>
-            <p class="error" id="lobby-error"></p>
+        <label class="field">Neved
+            <input id="in-name" maxlength="16" placeholder="pl. Erik">
+        </label>
+        <div class="row">
+            <button id="btn-solo" class="btn primary">Egyedül játszom</button>
+            <button id="btn-create" class="btn">Szoba létrehozása barátoknak</button>
         </div>
+        <div class="divider"><span>vagy csatlakozz egy szobához</span></div>
+        <div class="row">
+            <input id="in-code" class="mono code-input" maxlength="4" placeholder="KÓD">
+            <button id="btn-join" class="btn">Csatlakozás</button>
+        </div>
+        <p class="error" id="lobby-error"></p>
+    </div>
 
-        <div id="lobby-room" hidden>
-            <div class="room-code-box">
-                <div>
-                    <div class="tb-label">Szobakód</div>
-                    <div class="room-code mono" id="room-code">----</div>
+    <div class="dialog xwide" id="lobby-room" hidden>
+        <div class="room-grid">
+            <div class="room-main">
+                <div class="kicker">Új műszak</div>
+                <h2>Válaszd ki a légteret</h2>
+                <div class="step-label"><span class="step-num">1</span> Reptér</div>
+                <div id="airport-cards" class="airport-cards"></div>
+
+                <div class="step-label"><span class="step-num">2</span> Szabályok</div>
+                <div class="seg big" id="preset-seg"></div>
+                <p class="hint" id="preset-hint"></p>
+                <div id="rules-list"></div>
+
+                <div class="opt-block">
+                    <h3>Forgalom</h3>
+                    <div class="seg big" id="traffic-seg"></div>
                 </div>
-                <button id="btn-copy" class="btn ghost">Link másolása</button>
+                <div class="opt-block">
+                    <h3>Gyakorlás</h3>
+                    <div class="seg big" id="practice-seg"></div>
+                    <p class="hint">A gyakorló módok nem számítanak bele a pontszámba.</p>
+                </div>
+                <div class="opt-block">
+                    <h3>Kezdés</h3>
+                    <div class="seg big" id="opening-seg"></div>
+                    <p class="hint" id="opening-desc"></p>
+                </div>
             </div>
-            <div class="grid2" id="host-settings">
-                <label class="field">Reptér
-                    <select id="rs-airport"></select>
-                </label>
-                <label class="field">Forgalom
-                    <select id="rs-traffic">
-                        <option value="light">Nyugodt</option>
-                        <option value="normal">Normál</option>
-                        <option value="busy">Csúcsidő</option>
-                    </select>
-                </label>
+
+            <div class="room-side">
+                <div class="room-code-box">
+                    <div>
+                        <div class="tb-label">Szobakód</div>
+                        <div class="room-code mono" id="room-code">----</div>
+                    </div>
+                    <button id="btn-copy" class="btn ghost">Link másolása</button>
+                </div>
+                <p class="hint">Küldd el a linket vagy a kódot, és a barátaid beléphetnek. Egyedül is indíthatod.</p>
                 <label class="field">Multi mód
                     <select id="rs-mode"></select>
                 </label>
+                <p class="hint" id="rs-mode-desc"></p>
                 <label class="field" id="rs-offset-field">Szektorhatár elforgatása
                     <input id="rs-offset" type="range" min="0" max="359" step="15" value="0">
                 </label>
+                <div class="tb-label" style="margin:6px 0">Irányítók</div>
+                <div id="room-players"></div>
+                <div class="mult-box">
+                    <div class="tb-label">Pontszorzó</div>
+                    <div class="mult mono" id="mult-value">×1.00</div>
+                    <div class="hint" id="mult-summary"></div>
+                </div>
+                <button id="btn-start" class="btn primary block">Műszak indítása</button>
+                <p class="hint" id="wait-host" hidden>A szobagazda állítja be és indítja a műszakot…</p>
+                <button id="btn-leave" class="btn ghost block">Kilépés a szobából</button>
             </div>
-            <p class="hint" id="rs-mode-desc"></p>
-            <div id="room-players"></div>
-            <div class="row">
-                <button id="btn-start" class="btn primary">Műszak indítása</button>
-                <button id="btn-leave" class="btn ghost">Kilépés</button>
-            </div>
-            <p class="hint" id="wait-host" hidden>A szobagazda indítja a műszakot…</p>
         </div>
     </div>
 </div>
@@ -172,7 +182,7 @@
                     <tr><td><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Következő / előző induló</td></tr>
                     <tr><td><kbd>N</kbd> / <kbd>Shift</kbd>+<kbd>N</kbd></td><td>Legújabb / régebbi gép a légtérben</td></tr>
                     <tr><td><kbd>W</kbd> / <kbd>S</kbd></td><td>Sebesség ±10 csomó (<kbd>Shift</kbd>: max / min)</td></tr>
-                    <tr><td><kbd>C</kbd> / <kbd>D</kbd> vagy <kbd>↑</kbd> / <kbd>↓</kbd></td><td>Emelkedés / süllyedés 1000 lábbal (<kbd>Shift</kbd>: max / min)</td></tr>
+                    <tr><td><kbd>C</kbd> / <kbd>D</kbd> vagy <kbd>↑</kbd> / <kbd>↓</kbd></td><td>Emelkedés / süllyedés 1000 lábbal (<kbd>Shift</kbd>: max / min) – csak ha a Magasság szabály be van kapcsolva</td></tr>
                     <tr><td><kbd>H</kbd></td><td>Felső sáv elrejtése</td></tr>
                     <tr><td><kbd>Esc</kbd></td><td>Kijelölés megszüntetése</td></tr>
                 </table>
@@ -190,7 +200,12 @@
                     <li>Görgő: nagyítás, jobb gombos húzás: mozgatás.</li>
                 </ul>
                 <h3>Színek</h3>
-                <p><span class="arr-c">■ Érkező</span> &nbsp; <span class="dep-c">■ Induló</span> &nbsp; <span class="tr-c">■ Átrepülő</span> &nbsp; <span class="bad-c">◯ Konfliktus</span></p>
+                <p><span class="arr-c">■ Érkező</span> &nbsp; <span class="dep-c">■ Induló</span> &nbsp; <span class="tr-c">■ Átrepülő</span> &nbsp; <span class="em-c">■ Vészhelyzet</span> &nbsp; <span class="bad-c">◯ Konfliktus</span></p>
+                <p>Zivatar: a zöld és sárga rész átrepülhető, a <span class="bad-c">piros mag</span> incidens. Lezárt kifutóra nem lehet leszállni és felszállni.</p>
+                <h3>Hangok</h3>
+                <p>Felfelé lépő csengő: új induló vár (40 mp-enként emlékeztet, ha sokáig vár) · rövid pitty: érkező lép be ·
+                    két mély pitty: átrepülő · gyors dupla sípolás: két gép túl közel · ding: sikeres leszállás/kilépés ·
+                    mély zúgás: incidens · sziréna: vészhelyzet. A 🔊 gombbal halkíthatod vagy kikapcsolhatod.</p>
                 <h3>Cél</h3>
                 <p>Az érkezőket juttasd le egy kifutóra, az indulókat és átrepülőket a kijelölt kapun (A–F) küldd ki.
                     Tarts legalább 3 nm vagy 1000 láb távolságot. Figyeld az üzemanyagot és a földi várakozási időt.</p>
@@ -206,8 +221,7 @@
         <h2 id="sum-title">Összesítés</h2>
         <div id="sum-body"></div>
         <div class="row">
-            <button id="btn-again" class="btn primary">Új műszak</button>
-            <button id="btn-sum-close" class="btn ghost">Bezárás</button>
+            <button id="btn-sum-close" class="btn primary">Vissza a beállításokhoz</button>
         </div>
     </div>
 </div>
@@ -221,6 +235,7 @@
 </div>
 
 <script src="/shared/rules.js"></script>
+<script src="sound.js"></script>
 <script src="app.js"></script>
 </body>
 </html>

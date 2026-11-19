@@ -7,9 +7,19 @@
     const KIND_LABEL = { arr: 'ÉRK', dep: 'IND', transit: 'ÁTR' };
     const KIND_NAME = { arr: 'Érkező', dep: 'Induló', transit: 'Átrepülő' };
     const COLORS = {
-        arr: '#ff6f7d', dep: '#5fa8ff', transit: '#f5c451', bad: '#ff4d5e',
-        grid: 'rgba(120,150,190,0.07)', ring: 'rgba(120,150,190,0.16)', airspace: 'rgba(79,209,197,0.35)',
-        runway: '#9fb0c6', text: '#c9d4e3', muted: '#6f7f96', accent: '#4fd1c5'
+        arr: '#ff6f7d', dep: '#5fa8ff', transit: '#f5c451', em: '#c58cff', bad: '#ff4d5e',
+        grid: 'rgba(120,150,190,0.08)', border: 'rgba(79,209,197,0.35)',
+        text: '#c9d4e3', muted: '#6f7f96', accent: '#4fd1c5'
+    };
+    const AIRPORT_DESC = {
+        LOWW: 'Két egymást keresztező kifutó a Duna mellett, Bécs keleti szélén.',
+        EGLL: 'Két hosszú párhuzamos kifutó, nyugat felől sűrű forgalommal.',
+        EDDF: 'Három párhuzamos kifutó és egy csak felszállásra használt északi–déli pálya.',
+        LKPR: 'Két keresztező kifutó Prága nyugati dombjain.',
+        KSFO: 'Négy, kettesével keresztező kifutó az öböl partján.',
+        KJFK: 'Két párhuzamos pár a Jamaica-öböl szélén, a tenger fölött érkezőkkel.',
+        KORD: 'Nyolc kifutó, többnyire párhuzamosan: a legnagyobb kihívás.',
+        KATL: 'Öt párhuzamos kifutó, a világ egyik legforgalmasabb repülőtere.'
     };
 
     // ---------- állapot ----------
@@ -19,17 +29,19 @@
         room: null,
         info: null,          // statikus reptéradat
         snap: null,          // legutóbbi pillanatkép
+        snapAt: 0,           // mikor érkezett (performance.now)
         acById: new Map(),
+        disp: new Map(),     // simított megjelenítési helyzet gépenként
         trails: new Map(),
-        selected: null,
         lastTrailT: 0,
-        cycleIndex: 0,
+        selected: null,
         drag: null,
         localRoute: null,    // húzás közbeni helyi útvonal
         map: null,           // háttértérkép
         view: { zoom: 1, panX: 0, panY: 0 },
         logs: [],
-        firstAirspaceSeen: new Map()
+        firstAirspaceSeen: new Map(),
+        draft: null          // a lobbiban szerkesztett műszak-beállítás (gazda)
     };
     let soloPending = false;
 
@@ -59,14 +71,14 @@
                 if (m.room && m.room.code) {
                     try { history.replaceState(null, '', `?room=${m.room.code}`); } catch (e) { /* nem baj */ }
                 }
-                renderLobby();
                 if (soloPending) {
                     soloPending = false;
-                    send({ t: 'start' });
                 }
+                renderLobby();
                 break;
             case 'room':
                 state.room = m.room;
+                if (!m.room.started) state.info = null;
                 renderLobby();
                 renderPlayers();
                 renderTopbar();
@@ -74,23 +86,33 @@
             case 'static':
                 state.info = m.info;
                 state.snap = null;
+                state.disp.clear();
                 state.trails.clear();
                 state.selected = null;
                 state.view = { zoom: 1, panX: 0, panY: 0 };
                 $('summary').hidden = true;
                 renderLobby();
                 $('wind').textContent = `SZÉL ${String(m.info.windFrom).padStart(3, '0')}°`;
+                $('st-mult').textContent = `×${m.info.multiplier.toFixed(2)}`;
                 loadMap(m.info.icao);
                 break;
             case 'state':
                 onState(m.s);
-                for (const ev of m.ev) addLog(ev.kind, ev.text, ev.t);
+                for (const ev of m.ev) {
+                    addLog(ev.kind, ev.text, ev.t);
+                    notify(ev);
+                }
+                checkConflicts();
+                checkDepartures();
                 break;
             case 'log':
                 addLog(m.kind, m.text, null, m.by, m.color);
                 break;
             case 'cmdResult':
                 if (!m.ok && m.text) addLog('warn', m.text);
+                break;
+            case 'queued':
+                $('queued').textContent = m.count ? `${m.count} parancs vár a folytatásra` : '';
                 break;
             case 'error':
                 $('lobby-error').textContent = m.text;
@@ -105,11 +127,13 @@
 
     function onState(s) {
         state.snap = s;
+        state.snapAt = performance.now();
         state.acById.clear();
         for (const a of s.aircraft) {
             state.acById.set(a.id, a);
             if (!state.firstAirspaceSeen.has(a.id) && a.st !== 'ground') state.firstAirspaceSeen.set(a.id, s.t);
         }
+        for (const id of state.disp.keys()) if (!state.acById.has(id)) state.disp.delete(id);
         if (s.t - state.lastTrailT >= 2 || s.t < state.lastTrailT) {
             state.lastTrailT = s.t;
             for (const a of s.aircraft) {
@@ -131,6 +155,7 @@
     const myPlayer = () => state.room && state.room.players.find((p) => p.id === state.me);
     const isHost = () => state.room && state.room.hostId === state.me;
     const canControl = (ac) => !state.room || Rules.canControl(ac, myPlayer(), state.room.settings, state.room.players);
+    const rules = () => (state.info ? state.info.shift.rules : Rules.defaultShift().rules);
     const fmtTime = (sec) => {
         const s = Math.max(0, Math.floor(sec));
         const h = Math.floor(s / 3600);
@@ -139,13 +164,14 @@
         return h ? `${h}:${mm}:${ss}` : `${mm}:${ss}`;
     };
     const esc = (t) => String(t).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+    const rwState = (idx) => (state.snap && state.snap.runways[idx]) || { e: 0, w: 0, c: 0 };
     const runwayLabel = (idx) => {
         if (!state.info || idx == null) return '–';
         const rw = state.info.runways[idx];
-        const end = state.snap ? state.snap.runways[idx] : 0;
-        return rw ? rw.names[end] : '–';
+        return rw ? rw.names[rwState(idx).e] : '–';
     };
     const fl = (alt) => String(Math.round(alt / 100)).padStart(3, '0');
+    const acColor = (a) => (a.em != null ? COLORS.em : COLORS[a.k]);
 
     function addLog(kind, text, t, by, color) {
         const entry = { kind, text, t: t != null ? t : (state.snap ? Math.round(state.snap.t) : 0), by, color };
@@ -160,6 +186,76 @@
     function renderLogHistory() {
         $('log-history').innerHTML = state.logs.slice(-40).reverse().map((l) => `
             <div class="log-line ${l.kind}"><span class="t">${fmtTime(l.t)}</span>${l.by ? `<span class="by" style="color:${l.color}">${esc(l.by)}:</span>` : ''}${esc(l.text)}</div>`).join('');
+    }
+
+    // ---------- hangok és értesítések ----------
+    const Sound = window.LegterSound;
+    const alerts = { conflictIds: new Set(), lastConflictBeep: 0, lastDepReminder: performance.now(), depCount: 0, toastTimer: null };
+
+    // csak azokról a gépekről szólunk, amelyeket a játékos irányíthat
+    function relevant(ev) {
+        if (ev.sound === 'good' || ev.sound === 'incident' || ev.sound === 'warn') return true;
+        if (ev.sound === 'depReady') return canControl({ k: 'dep', st: 'ground', x: 0, y: 0 });
+        const a = ev.aircraftId != null ? state.acById.get(ev.aircraftId) : null;
+        return !a || canControl(a);
+    }
+
+    function showToast(html, cls, aircraftId) {
+        const t = $('toast');
+        t.className = cls || '';
+        t.innerHTML = html;
+        t.hidden = false;
+        t.onclick = () => { if (aircraftId != null && state.acById.has(aircraftId)) select(aircraftId); t.hidden = true; };
+        clearTimeout(alerts.toastTimer);
+        alerts.toastTimer = setTimeout(() => { t.hidden = true; }, 5000);
+    }
+
+    function notify(ev) {
+        if (!ev.sound || !relevant(ev)) return;
+        Sound.play(ev.sound);
+        if (ev.sound === 'depReady') {
+            const a = state.acById.get(ev.aircraftId);
+            showToast(`<b>${a ? a.cs : ''}</b> felszállásra kész – kattints ide, vagy <kbd>Tab</kbd> + <kbd>X</kbd>`, '', ev.aircraftId);
+            const panel = $('dep-list').closest('.list-panel');
+            panel.classList.remove('flash');
+            void panel.offsetWidth;
+            panel.classList.add('flash');
+            alerts.lastDepReminder = performance.now();
+        } else if (ev.sound === 'emergency') {
+            const a = state.acById.get(ev.aircraftId);
+            showToast(`<b>${a ? a.cs : ''}</b> VÉSZHELYZET – 6 percen belül le kell szállnia`, 'em', ev.aircraftId);
+        }
+    }
+
+    function checkConflicts() {
+        if (!state.snap) return;
+        const now = performance.now();
+        const ids = new Set(state.snap.aircraft.filter((a) => a.cf && canControl(a)).map((a) => a.id));
+        let fresh = false;
+        for (const id of ids) if (!alerts.conflictIds.has(id)) fresh = true;
+        alerts.conflictIds = ids;
+        // új konfliktusnál azonnal, tartós konfliktusnál 2,5 mp-enként sípol
+        if (ids.size && (fresh || now - alerts.lastConflictBeep > 2500)) {
+            alerts.lastConflictBeep = now;
+            Sound.play('conflict');
+        }
+    }
+
+    function checkDepartures() {
+        if (!state.snap) return;
+        const deps = state.snap.aircraft.filter((a) => a.st === 'ground' && canControl(a));
+        const panel = $('dep-list').closest('.list-panel');
+        panel.classList.toggle('waiting', deps.length > 0);
+        document.title = deps.length ? `(${deps.length}) Légtér – induló vár` : 'Légtér – többjátékos légiirányítás';
+        const now = performance.now();
+        // ha valaki régóta vár, 40 mp-enként emlékeztet
+        const oldest = deps.reduce((m, a) => Math.min(m, a.gf), Infinity);
+        if (deps.length && oldest < 240 && now - alerts.lastDepReminder > 40000 && !(state.room && state.room.paused)) {
+            alerts.lastDepReminder = now;
+            Sound.play('depReminder');
+            const a = deps.find((d) => d.gf === oldest);
+            showToast(`<b>${deps.length}</b> induló vár a felszállásra – a legrégebbi: <b>${a.cs}</b> (${a.gf}s)`, '', a.id);
+        }
     }
 
     // ---------- kijelölés ----------
@@ -178,11 +274,13 @@
         $('tb-airport').textContent = state.info ? `${state.info.icao} · ${state.info.name}` : '–';
         $('tb-room').textContent = r ? r.code : '–';
         if (state.snap) {
+            const st = state.snap.stats;
             $('tb-clock').textContent = fmtTime(state.snap.t);
-            $('st-landed').textContent = state.snap.stats.landed;
-            $('st-departed').textContent = state.snap.stats.departed;
-            $('st-transited').textContent = state.snap.stats.transited;
-            $('st-incidents').textContent = state.snap.stats.incidents;
+            $('st-score').textContent = st.score;
+            $('st-landed').textContent = st.landed;
+            $('st-departed').textContent = st.departed;
+            $('st-transited').textContent = st.transited;
+            $('st-incidents').textContent = st.incidents;
         }
         if (r) {
             for (const b of document.querySelectorAll('#speed-seg button')) {
@@ -215,13 +313,15 @@
         let right;
         if (ground) {
             right = `<div class="timer ${a.gf < 60 ? 'low' : ''}">FÖLD ${a.gf}s</div>`;
+        } else if (a.em != null) {
+            right = `<div class="timer low">VÉSZ ${fmtTime(a.em)}</div>`;
         } else {
             right = `<div class="timer ${a.f < 90 ? 'low' : ''}">${a.st === 'final' ? 'VÉGSŐ' : a.st === 'rollout' ? 'GURUL' : `${a.f}s`}</div>`;
         }
         const target = a.k === 'arr' ? (a.rw != null ? `RWY ${runwayLabel(a.rw)}` : 'nincs kifutó')
-            : `<span class="gate-chip">${a.eg}</span>${a.k === 'dep' ? `RWY ${runwayLabel(a.rw)}` : `${a.ig} → ${a.eg}`}`;
-        return `<div class="ac-row k-${a.k} ${state.selected === a.id ? 'sel' : ''} ${locked ? 'locked' : ''}" data-id="${a.id}">
-            <span class="badge" style="color:${COLORS[a.k]}">${KIND_LABEL[a.k]}</span>
+            : `<span class="gate-chip">${a.eg}</span>${a.k === 'dep' ? `RWY ${runwayLabel(a.rw)}` : `${a.ig} → ${a.eg}`}${a.xa ? ` · ${a.xa / 100}` : ''}`;
+        return `<div class="ac-row k-${a.em != null ? 'em' : a.k} ${state.selected === a.id ? 'sel' : ''} ${locked ? 'locked' : ''}" data-id="${a.id}">
+            <span class="badge" style="color:${acColor(a)}">${a.em != null ? 'VÉSZ' : KIND_LABEL[a.k]}</span>
             <div><div class="cs">${a.cs}</div><div class="meta">${cls} · ${target}</div></div>
             ${right}</div>`;
     }
@@ -239,6 +339,7 @@
             return;
         }
         const c = state.info.classes[a.c];
+        const alt = rules().altitude;
         const fuelMax = a.st === 'ground' ? 300 : (a.k === 'transit' ? 520 : 600);
         const fuel = a.st === 'ground' ? a.gf : a.f;
         const pct = Math.max(0, Math.min(100, (fuel / fuelMax) * 100));
@@ -249,18 +350,25 @@
         else if (a.st === 'final') status = `Végső megközelítés · ${runwayLabel(a.rw)}`;
         else if (a.st === 'rollout') status = `Kigurul · ${runwayLabel(a.rw)}`;
         else if (a.k === 'arr') status = a.rw != null ? `Megközelítés · ${runwayLabel(a.rw)}` : 'Kifutóra vár – nyomd meg a számát';
-        else status = `Kijárat: ${a.eg} kapu`;
+        else status = `Kijárat: ${a.eg} kapu${a.xa ? `, ${a.xa / 100}-es szinten` : ''}`;
         if (a.hd) status += ' · körözik';
 
-        const rwButtons = state.info.runways.map((rw, i) => `<button class="btn rw-btn ${a.rw === i ? 'active' : ''}" data-act="runway" data-rw="${i}">${runwayLabel(i)}<kbd>${i + 1}</kbd></button>`).join('');
+        const rwButtons = state.info.runways.map((rw, i) => {
+            const rs = rwState(i);
+            const closed = rs.c > 0;
+            return `<button class="btn rw-btn ${a.rw === i ? 'active' : ''}" data-act="runway" data-rw="${i}" ${closed ? 'disabled title="Lezárva"' : ''}>${runwayLabel(i)}${closed ? ' ✕' : ''}<kbd>${i + 1}</kbd></button>`;
+        }).join('');
+        const altButtons = alt ? `<button class="btn" data-act="alt" data-d="-1000">▼ 1000<kbd>D</kbd></button>
+                    <button class="btn" data-act="alt" data-d="1000">▲ 1000<kbd>C</kbd></button>` : '';
         let actions = '';
         if (a.st === 'ground') {
             actions = `<div class="btn-row">${rwButtons}</div><div class="btn-row"><button class="btn primary" data-act="takeoff">Felszállás<kbd>X</kbd></button></div>`;
+        } else if (a.st === 'takeoff') {
+            actions = alt ? `<div class="btn-row">${altButtons}</div>` : '';
         } else if (a.st === 'airborne' || a.st === 'final') {
             actions = `${a.k === 'arr' ? `<div class="btn-row">${rwButtons}</div>` : ''}
                 <div class="btn-row">
-                    <button class="btn" data-act="alt" data-d="-1000">▼ 1000<kbd>D</kbd></button>
-                    <button class="btn" data-act="alt" data-d="1000">▲ 1000<kbd>C</kbd></button>
+                    ${altButtons}
                     <button class="btn" data-act="spd" data-d="-10">− 10 kt<kbd>S</kbd></button>
                     <button class="btn" data-act="spd" data-d="10">+ 10 kt<kbd>W</kbd></button>
                 </div>
@@ -275,14 +383,16 @@
             const owners = Rules.ownersOf(a, state.room.settings, state.room.players).map((p) => p.name);
             ownerNote = `<div class="owner-note">Nem a te géped${owners.length ? ` – ${esc(owners.join(', '))} irányítja` : ''}.</div>`;
         }
+        const emBanner = a.em != null ? `<div class="em-banner">VÉSZHELYZET – még ${fmtTime(a.em)} a leszállásig</div>` : '';
         card.innerHTML = `
-            <div class="sel-head"><span class="cs" style="color:${COLORS[a.k]}">${a.cs}</span><span class="badge" style="color:${COLORS[a.k]}">${KIND_LABEL[a.k]}</span></div>
+            ${emBanner}
+            <div class="sel-head"><span class="cs" style="color:${acColor(a)}">${a.cs}</span><span class="badge" style="color:${acColor(a)}">${KIND_LABEL[a.k]}</span></div>
             <div class="sel-sub">${KIND_NAME[a.k]} · ${c.label}</div>
             <div class="sel-grid">
                 <div><div class="tb-label">Állapot</div><div style="font-size:13px">${status}</div></div>
                 <div><div class="tb-label">${a.st === 'ground' ? 'Földi idő' : 'Üzemanyag'}</div><div class="v">${fuel}s</div>
                     <div class="fuel-bar"><i class="${pct < 20 ? 'low' : ''}" style="width:${pct}%"></i></div></div>
-                <div><div class="tb-label">Magasság</div><div class="v">${fl(a.al)}${a.ta !== a.al ? ` → ${fl(a.ta)}` : ''}</div></div>
+                ${alt ? `<div><div class="tb-label">Magasság</div><div class="v">${fl(a.al)}${a.ta !== a.al ? ` → ${fl(a.ta)}` : ''}</div></div>` : ''}
                 <div><div class="tb-label">Sebesség</div><div class="v">${a.s}${a.ts !== a.s ? ` → ${a.ts}` : ''} kt</div></div>
             </div>
             ${locked ? '' : actions}
@@ -314,13 +424,15 @@
         } catch (e) {
             airportsCache = [{ icao: 'LOWW', name: 'Bécs – Schwechat', runways: 2 }];
         }
-        const opts = airportsCache.map((a) => `<option value="${a.icao}">${a.icao} · ${esc(a.name)} (${a.runways} kifutó)</option>`).join('');
-        $('in-airport').innerHTML = opts;
-        $('rs-airport').innerHTML = opts;
-        const modeOpts = Object.entries(Rules.MODES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
-        $('in-mode').innerHTML = modeOpts;
-        $('rs-mode').innerHTML = modeOpts;
-        $('mode-desc').textContent = Rules.MODES[$('in-mode').value].desc;
+        $('rs-mode').innerHTML = Object.entries(Rules.MODES).map(([k, v]) => `<option value="${k}">${v.label}</option>`).join('');
+    }
+
+    function currentShift() {
+        return state.room ? state.room.settings.shift : Rules.defaultShift();
+    }
+
+    function pushShift(shift) {
+        send({ t: 'settings', settings: { shift } });
     }
 
     function renderLobby() {
@@ -339,11 +451,50 @@
         lobby.hidden = false;
         $('lobby-start').hidden = true;
         $('lobby-room').hidden = false;
-        $('room-code').textContent = r.code;
         const host = isHost();
-        for (const id of ['rs-airport', 'rs-traffic', 'rs-mode', 'rs-offset']) $(id).disabled = !host;
-        $('rs-airport').value = r.settings.airport;
-        $('rs-traffic').value = r.settings.traffic;
+        const shift = currentShift();
+        $('room-code').textContent = r.code;
+
+        // reptérkártyák
+        $('airport-cards').innerHTML = airportsCache.map((a) => `
+            <button class="ap-card ${r.settings.airport === a.icao ? 'on' : ''}" data-icao="${a.icao}" ${host ? '' : 'disabled'}>
+                <span class="ap-code">${a.icao}</span>
+                <span><div class="ap-name">${esc(a.name)}</div><div class="ap-desc">${esc(AIRPORT_DESC[a.icao] || `${a.runways} kifutó`)}</div></span>
+            </button>`).join('');
+
+        // előbeállítások
+        const preset = Rules.presetOf(shift.rules);
+        $('preset-seg').innerHTML = Object.entries(Rules.PRESETS).map(([k, p]) => `<button data-preset="${k}" class="${preset === k ? 'on' : ''}" ${host ? '' : 'disabled'}>${p.label}</button>`).join('')
+            + `<button class="${preset === 'custom' ? 'on' : ''}" disabled>Egyéni</button>`;
+        $('preset-hint').textContent = preset === 'custom'
+            ? 'Egyéni szabályok: bármelyik kapcsolót átállíthatod.'
+            : 'A Klasszikus és a Nehéz előre beállított szabálycsomag. Bármelyik kapcsoló átállításával Egyéni lesz.';
+
+        // szabályok
+        $('rules-list').innerHTML = Rules.RULE_GROUPS.map((g) => `
+            <div class="rule-group"><h3>${g.label}</h3>
+            ${Rules.RULE_DEFS.filter((d) => d.group === g.key).map((d) => {
+                const on = !!shift.rules[d.key];
+                return `<label class="rule ${host ? '' : 'disabled'}">
+                    <input type="checkbox" data-rule="${d.key}" ${on ? 'checked' : ''} ${host ? '' : 'disabled'}>
+                    <span><div class="rt">${d.label}</div><div class="rd">${d.desc}</div></span>
+                    <span class="rm"><span class="${on ? '' : 'on'}">ki ×${d.off.toFixed(2)}</span><span class="${on ? 'on' : ''}">be ×${d.on.toFixed(2)}</span></span>
+                </label>`;
+            }).join('')}</div>`).join('');
+
+        $('traffic-seg').innerHTML = Object.entries(Rules.TRAFFIC_LEVELS).map(([lvl, m]) => `<button data-traffic="${lvl}" class="${Number(lvl) === shift.traffic ? 'on' : ''}" ${host ? '' : 'disabled'}>${lvl}%<small>×${m.toFixed(2)}</small></button>`).join('');
+        $('practice-seg').innerHTML = Object.entries(Rules.PRACTICE).map(([k, v]) => `<button data-practice="${k}" class="${shift.practice === k ? 'on' : ''}" ${host ? '' : 'disabled'}>${v}</button>`).join('');
+        $('opening-seg').innerHTML = Object.entries(Rules.OPENINGS).map(([k, v]) => `<button data-opening="${k}" class="${shift.opening === k ? 'on' : ''}" ${host ? '' : 'disabled'}>${v.label}</button>`).join('');
+        $('opening-desc').textContent = Rules.OPENINGS[shift.opening].desc;
+
+        const mult = Rules.scoreMultiplier(shift);
+        $('mult-value').textContent = shift.practice === 'all' ? `×${mult.toFixed(2)}` : 'gyakorlás';
+        const ap = airportsCache.find((a) => a.icao === r.settings.airport);
+        $('mult-summary').textContent = `${ap ? ap.name : r.settings.airport} · ${Rules.PRESETS[preset] ? Rules.PRESETS[preset].label : 'Egyéni'} · ${shift.traffic}% forgalom`;
+
+        // multi
+        $('rs-mode').disabled = !host;
+        $('rs-offset').disabled = !host;
         $('rs-mode').value = r.settings.mode;
         $('rs-offset').value = r.settings.sectorOffset;
         $('rs-offset-field').style.display = r.settings.mode === 'sector' ? '' : 'none';
@@ -371,20 +522,15 @@
         return name;
     }
 
-    function lobbySettings() {
-        return { airport: $('in-airport').value, mode: $('in-mode').value, traffic: $('in-traffic').value };
-    }
-
     function bindLobby() {
         try { $('in-name').value = localStorage.getItem('legter-name') || ''; } catch (e) { /* nem baj */ }
         const params = new URLSearchParams(location.search);
         if (params.get('room')) $('in-code').value = params.get('room').toUpperCase();
-        $('in-mode').onchange = () => { $('mode-desc').textContent = Rules.MODES[$('in-mode').value].desc; };
         $('btn-solo').onclick = () => {
             soloPending = true;
-            send({ t: 'create', name: getName(), settings: Object.assign(lobbySettings(), { mode: 'free' }) });
+            send({ t: 'create', name: getName(), settings: { mode: 'free' } });
         };
-        $('btn-create').onclick = () => send({ t: 'create', name: getName(), settings: lobbySettings() });
+        $('btn-create').onclick = () => send({ t: 'create', name: getName(), settings: { mode: 'roles' } });
         $('btn-join').onclick = () => {
             const code = $('in-code').value.trim().toUpperCase();
             if (code.length !== 4) {
@@ -405,16 +551,40 @@
                 prompt('Másold ki a linket:', link);
             }
         };
-        const pushSettings = () => send({
+        $('airport-cards').onclick = (e) => {
+            const b = e.target.closest('[data-icao]');
+            if (b && isHost()) send({ t: 'settings', settings: { airport: b.dataset.icao } });
+        };
+        $('preset-seg').onclick = (e) => {
+            const b = e.target.closest('[data-preset]');
+            if (!b || !isHost()) return;
+            const shift = JSON.parse(JSON.stringify(currentShift()));
+            shift.rules = Object.assign({}, Rules.PRESETS[b.dataset.preset].rules);
+            pushShift(shift);
+        };
+        $('rules-list').onchange = (e) => {
+            const key = e.target.dataset.rule;
+            if (!key || !isHost()) return;
+            const shift = JSON.parse(JSON.stringify(currentShift()));
+            shift.rules[key] = e.target.checked;
+            pushShift(shift);
+        };
+        const segHandler = (attr, field, conv) => (e) => {
+            const b = e.target.closest(`[data-${attr}]`);
+            if (!b || !isHost()) return;
+            const shift = JSON.parse(JSON.stringify(currentShift()));
+            shift[field] = conv(b.dataset[attr]);
+            pushShift(shift);
+        };
+        $('traffic-seg').onclick = segHandler('traffic', 'traffic', Number);
+        $('practice-seg').onclick = segHandler('practice', 'practice', String);
+        $('opening-seg').onclick = segHandler('opening', 'opening', String);
+        const pushMulti = () => send({
             t: 'settings',
-            settings: {
-                airport: $('rs-airport').value,
-                traffic: $('rs-traffic').value,
-                mode: $('rs-mode').value,
-                sectorOffset: Number($('rs-offset').value)
-            }
+            settings: { mode: $('rs-mode').value, sectorOffset: Number($('rs-offset').value) }
         });
-        for (const id of ['rs-airport', 'rs-traffic', 'rs-mode', 'rs-offset']) $(id).onchange = pushSettings;
+        $('rs-mode').onchange = pushMulti;
+        $('rs-offset').onchange = pushMulti;
         $('room-players').onchange = (e) => {
             const s = e.target;
             if (!s.dataset.pid) return;
@@ -425,18 +595,19 @@
             send(msg);
         };
     }
+
     function showSummary(m) {
         const s = m.stats;
-        $('sum-title').textContent = `${fmtTime(m.time)} műszak · ${s.landed + s.departed + s.transited} mozgás`;
+        $('sum-title').textContent = `${fmtTime(m.time)} műszak · ${s.score} pont`;
         $('sum-body').innerHTML = `<div class="sum-stats">
             <div><b class="arr-c">${s.landed}</b>leszállt</div><div><b class="dep-c">${s.departed}</b>felszállt</div>
             <div><b class="tr-c">${s.transited}</b>átrepült</div><div><b class="bad-c">${s.incidents}</b>incidens</div></div>
+            <p class="hint">Alappont: ${s.base} · szorzó: ×${(m.multiplier || 1).toFixed(2)}${s.emergencies ? ` · vészhelyzetből leszállt: ${s.emergencies}` : ''}</p>
             <div class="sum-inc">${m.incidents.length ? m.incidents.map((i) => `<div>${fmtTime(i.t)} · ${esc(i.callsign)} – ${esc(i.reason)}</div>`).join('') : 'Tiszta műszak, egyetlen incidens nélkül.'}</div>`;
-        $('btn-again').hidden = !isHost();
         $('summary').hidden = false;
     }
 
-    // ---------- radar rajzolás ----------
+    // ---------- radar: vetítés ----------
     const canvas = $('scope');
     const ctx = canvas.getContext('2d');
     let W = 0;
@@ -452,9 +623,10 @@
         canvas.height = Math.round(H * DPR);
     }
 
+    const airspace = () => (state.info ? state.info.airspace : { hw: 24, hh: 14 });
     function scale() {
-        const R = state.info ? state.info.radius : 18;
-        return (Math.min(W, H) / (2 * (R + 2.2))) * state.view.zoom;
+        const as = airspace();
+        return Math.min(W / (2 * (as.hw + 0.8)), H / (2 * (as.hh + 0.8))) * state.view.zoom;
     }
     function toScreen(x, y) {
         const k = scale();
@@ -465,6 +637,39 @@
         return [(sx - W / 2) / k - state.view.panX, -(sy - H / 2) / k - state.view.panY];
     }
 
+    // ---------- simított mozgás ----------
+    // A szerver 5×/s küld helyzetet. A két frissítés között a gépet a saját irányában és sebességével
+    // továbbvisszük, a megjelenített helyzet pedig finoman követi ezt a becslést.
+    let lastFrame = performance.now();
+    function updateDisplay(now) {
+        const dtFrame = Math.min(0.1, (now - lastFrame) / 1000);
+        lastFrame = now;
+        if (!state.snap || !state.info) return;
+        const paused = state.room && state.room.paused;
+        const speed = state.room ? state.room.speed : 1;
+        const since = paused ? 0 : Math.min(0.6, (now - state.snapAt) / 1000) * speed;
+        const nmPerKtS = state.info.timeScale / 3600;
+        const follow = Math.min(1, dtFrame * 14);
+        for (const a of state.snap.aircraft) {
+            if (a.st === 'ground') continue;
+            const d = a.s * nmPerKtS * since;
+            const px = a.x + Math.sin(a.h * Math.PI / 180) * d;
+            const py = a.y + Math.cos(a.h * Math.PI / 180) * d;
+            let disp = state.disp.get(a.id);
+            if (!disp || Math.hypot(disp.x - px, disp.y - py) > 2) {
+                disp = { x: px, y: py, h: a.h };
+                state.disp.set(a.id, disp);
+                continue;
+            }
+            disp.x += (px - disp.x) * follow;
+            disp.y += (py - disp.y) * follow;
+            let dh = ((a.h - disp.h + 540) % 360) - 180;
+            if (Math.abs(dh) > 90) dh = dh > 0 ? dh - 0 : dh;
+            disp.h = (disp.h + dh * follow + 360) % 360;
+        }
+    }
+    const posOf = (a) => state.disp.get(a.id) || { x: a.x, y: a.y, h: a.h };
+
     function routeFor(a) {
         if (state.localRoute && state.localRoute.id === a.id) return state.localRoute.route;
         return a.r;
@@ -474,7 +679,7 @@
         if (!state.info) return [];
         if (a.k === 'arr' && a.rw != null) {
             const rw = state.info.runways[a.rw];
-            const end = state.snap.runways[a.rw];
+            const end = rwState(a.rw).e;
             const thr = rw.ends[end];
             const other = rw.ends[1 - end];
             const len = Math.hypot(other[0] - thr[0], other[1] - thr[1]);
@@ -483,7 +688,7 @@
             const faf = [thr[0] + ux * state.info.fafDistance, thr[1] + uy * state.info.fafDistance];
             return a.st === 'final' ? [thr] : [faf, thr];
         }
-        if (a.eg) {
+        if (a.eg && !(rules().manualRouting && !a.r.length && a.st !== 'ground')) {
             const g = state.info.gates.find((x) => x.letter === a.eg);
             return g ? [g.pos] : [];
         }
@@ -521,13 +726,12 @@
     function renderBackground(c) {
         const m = state.map;
         const k = scale();
-        const R = state.info.radius;
+        const as = airspace();
         c.fillStyle = m && m.land.length ? MAP_COLORS.water : MAP_COLORS.land;
         c.fillRect(0, 0, W, H);
         if (m) {
             c.fillStyle = MAP_COLORS.land;
             for (const poly of m.land) { tracePoly(c, poly); c.fill('evenodd'); }
-            // domborzat: magasabb terület világosabb
             const elevs = m.terrain.map((t) => t.e);
             const maxE = Math.max(1, ...elevs);
             const minE = Math.min(...elevs, maxE);
@@ -564,7 +768,7 @@
             c.textAlign = 'center';
             c.fillStyle = MAP_COLORS.place;
             for (const pl of m.places) {
-                if (Math.hypot(pl.x, pl.y) > R - 2) continue;
+                if (Math.abs(pl.x) > as.hw - 2 || Math.abs(pl.y) > as.hh - 1.5) continue;
                 const [x, y] = toScreen(pl.x, pl.y);
                 c.fillRect(x - 1.5, y - 1.5, 3, 3);
                 c.fillText(pl.n.toUpperCase(), x, y - 6);
@@ -572,22 +776,24 @@
         }
         // finom rács
         c.fillStyle = COLORS.grid;
-        for (let x = -R - 6; x <= R + 6; x += 2) {
-            for (let y = -R - 6; y <= R + 6; y += 2) {
+        for (let x = -as.hw - 10; x <= as.hw + 10; x += 2) {
+            for (let y = -as.hh - 10; y <= as.hh + 10; y += 2) {
                 const [sx, sy] = toScreen(x, y);
+                if (sx < -2 || sy < -2 || sx > W + 2 || sy > H + 2) continue;
                 c.fillRect(sx - 0.6, sy - 0.6, 1.2, 1.2);
             }
         }
-        // a légtéren kívüli rész sötétítése
-        const [cx, cy] = toScreen(0, 0);
-        c.fillStyle = 'rgba(6,10,16,0.45)';
+        // a légtéren kívüli rész enyhe sötétítése
+        const [x0, y0] = toScreen(-as.hw, as.hh);
+        const [x1, y1] = toScreen(as.hw, -as.hh);
+        c.fillStyle = 'rgba(6,10,16,0.4)';
         c.beginPath();
         c.rect(0, 0, W, H);
-        c.arc(cx, cy, R * k, 0, Math.PI * 2, true);
-        c.fill();
+        c.rect(x1, y0, x0 - x1, y1 - y0);
+        c.fill('evenodd');
     }
 
-    function drawGrid() {
+    function drawBackground() {
         const key = [W, H, DPR, state.view.zoom, state.view.panX, state.view.panY, state.info.icao, !!state.map].join('|');
         if (bg.key !== key) {
             bg.key = key;
@@ -598,36 +804,27 @@
             renderBackground(c);
         }
         ctx.drawImage(bg.canvas, 0, 0, W, H);
-        const k = scale();
-        const R = state.info.radius;
-        const [cx, cy] = toScreen(0, 0);
-        ctx.strokeStyle = COLORS.ring;
+        const as = airspace();
+        const [x0, y0] = toScreen(-as.hw, as.hh);
+        const [x1, y1] = toScreen(as.hw, -as.hh);
+        ctx.strokeStyle = COLORS.border;
         ctx.lineWidth = 1;
-        ctx.setLineDash([2, 6]);
-        for (const r of [6, 12]) {
-            ctx.beginPath();
-            ctx.arc(cx, cy, r * k, 0, Math.PI * 2);
-            ctx.stroke();
-        }
-        ctx.setLineDash([]);
-        ctx.strokeStyle = COLORS.airspace;
-        ctx.lineWidth = 1.5;
-        ctx.beginPath();
-        ctx.arc(cx, cy, R * k, 0, Math.PI * 2);
-        ctx.stroke();
+        ctx.strokeRect(x0 + 0.5, y0 + 0.5, x1 - x0 - 1, y1 - y0 - 1);
         // északi nyíl
+        const nx = x1 - 26;
+        const ny = y1 - 18;
         ctx.fillStyle = COLORS.muted;
         ctx.font = '600 15px system-ui, sans-serif';
         ctx.textAlign = 'center';
-        ctx.fillText('É', W - 30, H - 70);
+        ctx.fillText('É', nx, ny - 40);
         ctx.strokeStyle = COLORS.muted;
         ctx.lineWidth = 1.5;
         ctx.beginPath();
-        ctx.moveTo(W - 30, H - 32);
-        ctx.lineTo(W - 30, H - 60);
-        ctx.lineTo(W - 34, H - 52);
-        ctx.moveTo(W - 30, H - 60);
-        ctx.lineTo(W - 26, H - 52);
+        ctx.moveTo(nx, ny);
+        ctx.lineTo(nx, ny - 28);
+        ctx.lineTo(nx - 4, ny - 20);
+        ctx.moveTo(nx, ny - 28);
+        ctx.lineTo(nx + 4, ny - 20);
         ctx.stroke();
     }
 
@@ -636,10 +833,16 @@
         if (!r || r.settings.mode !== 'sector' || !state.info) return;
         const n = Rules.sectorCount(r.players);
         const k = scale();
-        const R = state.info.radius;
+        const as = airspace();
+        const far = Math.hypot(as.hw, as.hh) + 2;
         const [cx, cy] = toScreen(0, 0);
+        const [x0, y0] = toScreen(-as.hw, as.hh);
+        const [x1, y1] = toScreen(as.hw, -as.hh);
         ctx.save();
-        ctx.strokeStyle = 'rgba(79,209,197,0.28)';
+        ctx.beginPath();
+        ctx.rect(x0, y0, x1 - x0, y1 - y0);
+        ctx.clip();
+        ctx.strokeStyle = 'rgba(79,209,197,0.3)';
         ctx.setLineDash([8, 6]);
         ctx.lineWidth = 1.2;
         ctx.beginPath();
@@ -647,26 +850,26 @@
         ctx.stroke();
         for (let i = 0; i < n; i++) {
             const brg = (r.settings.sectorOffset + i * (360 / n)) * Math.PI / 180;
-            const [x1, y1] = toScreen(Math.sin(brg) * Rules.TOWER_RADIUS, Math.cos(brg) * Rules.TOWER_RADIUS);
-            const [x2, y2] = toScreen(Math.sin(brg) * R, Math.cos(brg) * R);
+            const [xa, ya] = toScreen(Math.sin(brg) * Rules.TOWER_RADIUS, Math.cos(brg) * Rules.TOWER_RADIUS);
+            const [xb, yb] = toScreen(Math.sin(brg) * far, Math.cos(brg) * far);
             ctx.beginPath();
-            ctx.moveTo(x1, y1);
-            ctx.lineTo(x2, y2);
+            ctx.moveTo(xa, ya);
+            ctx.lineTo(xb, yb);
             ctx.stroke();
         }
         ctx.setLineDash([]);
-        ctx.font = '600 12px ui-monospace, monospace';
         ctx.textAlign = 'center';
         for (let i = 0; i < n; i++) {
             const mid = (r.settings.sectorOffset + (i + 0.5) * (360 / n)) * Math.PI / 180;
-            const [tx, ty] = toScreen(Math.sin(mid) * R * 0.62, Math.cos(mid) * R * 0.62);
+            const dist = Math.min(as.hw / Math.max(0.01, Math.abs(Math.sin(mid))), as.hh / Math.max(0.01, Math.abs(Math.cos(mid)))) * 0.62;
+            const [tx, ty] = toScreen(Math.sin(mid) * dist, Math.cos(mid) * dist);
             const owners = r.players.filter((p) => p.sector === i);
             ctx.fillStyle = owners.length ? owners[0].color : COLORS.muted;
             ctx.globalAlpha = 0.55;
+            ctx.font = '600 12px ui-monospace, monospace';
             ctx.fillText(`${i + 1}. SZEKTOR`, tx, ty);
             ctx.font = '11px system-ui, sans-serif';
             ctx.fillText(owners.map((p) => p.name).join(', ') || 'gazdátlan', tx, ty + 15);
-            ctx.font = '600 12px ui-monospace, monospace';
             ctx.globalAlpha = 1;
         }
         ctx.fillStyle = 'rgba(79,209,197,0.5)';
@@ -675,6 +878,52 @@
         ctx.restore();
     }
 
+    // ---------- zivatarok ----------
+    function drawStorms(now) {
+        if (!state.snap || !state.snap.storms) return;
+        const k = scale();
+        for (const s of state.snap.storms) {
+            const [sx, sy] = toScreen(s.x, s.y);
+            const layers = [
+                [s.r, 'rgba(70,160,90,0.22)', 'rgba(90,190,110,0.45)'],
+                [s.r * 0.62, 'rgba(210,180,60,0.25)', 'rgba(230,200,80,0.5)']
+            ];
+            if (s.core > 0) layers.push([s.core, 'rgba(220,60,70,0.45)', 'rgba(255,90,100,0.9)']);
+            for (const [r, fill, stroke] of layers) {
+                ctx.beginPath();
+                // kissé szabálytalan, „csapadékszerű” forma
+                for (let i = 0; i <= 24; i++) {
+                    const ang = (i / 24) * Math.PI * 2;
+                    const wob = 1 + 0.08 * Math.sin(ang * 3 + s.id * 1.7) + 0.05 * Math.sin(ang * 5 + s.id);
+                    const px = sx + Math.cos(ang) * r * k * wob;
+                    const py = sy + Math.sin(ang) * r * k * wob;
+                    if (i) ctx.lineTo(px, py); else ctx.moveTo(px, py);
+                }
+                ctx.closePath();
+                ctx.fillStyle = fill;
+                ctx.fill();
+                ctx.strokeStyle = stroke;
+                ctx.lineWidth = 1;
+                ctx.stroke();
+            }
+            // sodródás iránya
+            const ang = s.h * Math.PI / 180;
+            const ax = sx + Math.sin(ang) * (s.r * k + 14);
+            const ay = sy - Math.cos(ang) * (s.r * k + 14);
+            ctx.strokeStyle = 'rgba(220,230,240,0.6)';
+            ctx.lineWidth = 1.5;
+            ctx.beginPath();
+            ctx.moveTo(ax - Math.sin(ang) * 14, ay + Math.cos(ang) * 14);
+            ctx.lineTo(ax, ay);
+            ctx.lineTo(ax - Math.sin(ang - 0.5) * 7, ay + Math.cos(ang - 0.5) * 7);
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(ax - Math.sin(ang + 0.5) * 7, ay + Math.cos(ang + 0.5) * 7);
+            ctx.stroke();
+            void now;
+        }
+    }
+
+    // ---------- kifutók ----------
     const runwayLabelHits = [];
     const RUNWAY_WIDTH_NM = 0.03;
 
@@ -695,10 +944,10 @@
         runwayLabelHits.length = 0;
         const k = scale();
         const widthPx = Math.max(8, RUNWAY_WIDTH_NM * k * 1.6);
-        // először a megközelítési tengelyek, hogy a kifutók fölöttük legyenek
         state.info.runways.forEach((rw, i) => {
-            const end = state.snap.runways[i];
-            const [a, b] = [rw.ends[end], rw.ends[1 - end]];
+            const rs = rwState(i);
+            if (rs.c > 0) return;
+            const [a, b] = [rw.ends[rs.e], rw.ends[1 - rs.e]];
             const len = Math.hypot(b[0] - a[0], b[1] - a[1]);
             const ux = (a[0] - b[0]) / len;
             const uy = (a[1] - b[1]) / len;
@@ -717,8 +966,8 @@
             ctx.stroke();
         });
         state.info.runways.forEach((rw, i) => {
-            const end = state.snap.runways[i];
-            const [a, b] = [rw.ends[end], rw.ends[1 - end]];
+            const rs = rwState(i);
+            const [a, b] = [rw.ends[rs.e], rw.ends[1 - rs.e]];
             const sa = toScreen(...a);
             const sb = toScreen(...b);
             const dx = sb[0] - sa[0];
@@ -729,9 +978,8 @@
             const px = -ay * widthPx / 2;
             const py = ax * widthPx / 2;
             const angle = Math.atan2(dy, dx);
-            // aszfalt
-            ctx.fillStyle = '#3a4554';
-            ctx.strokeStyle = '#59677a';
+            ctx.fillStyle = rs.c > 0 ? '#3a2f36' : '#3a4554';
+            ctx.strokeStyle = rs.c > 0 ? '#7a4450' : '#59677a';
             ctx.lineWidth = 1;
             ctx.beginPath();
             ctx.moveTo(sa[0] + px, sa[1] + py);
@@ -741,7 +989,7 @@
             ctx.closePath();
             ctx.fill();
             ctx.stroke();
-            // küszöbcsíkok mindkét végen
+            // küszöbcsíkok
             ctx.strokeStyle = 'rgba(235,240,247,0.85)';
             ctx.lineWidth = Math.max(1, widthPx / 9);
             const bars = widthPx >= 12 ? 6 : 3;
@@ -757,7 +1005,7 @@
                     ctx.stroke();
                 }
             }
-            // szaggatott középvonal
+            // középvonal
             const margin = Math.min(lenPx * 0.22, widthPx * 3.2);
             if (lenPx > margin * 2 + 10) {
                 ctx.strokeStyle = 'rgba(235,240,247,0.55)';
@@ -769,18 +1017,36 @@
                 ctx.stroke();
                 ctx.setLineDash([]);
             }
-            // pályaszámok a burkolaton (ha elég nagy a nagyítás)
             if (widthPx >= 11 && lenPx > widthPx * 5) {
                 const fs = Math.min(widthPx * 0.62, 14);
                 const inset = Math.min(lenPx * 0.06, widthPx * 0.9) + fs;
-                drawRunwayDesignator(rw.names[end], sa[0] + ax * inset, sa[1] + ay * inset, angle + Math.PI / 2);
-                drawRunwayDesignator(rw.names[1 - end], sb[0] - ax * inset, sb[1] - ay * inset, angle - Math.PI / 2);
+                drawRunwayDesignator(rw.names[rs.e], sa[0] + ax * inset, sa[1] + ay * inset, angle + Math.PI / 2, fs);
+                drawRunwayDesignator(rw.names[1 - rs.e], sb[0] - ax * inset, sb[1] - ay * inset, angle - Math.PI / 2, fs);
+            }
+            // lezárás jelzése
+            const mx = (sa[0] + sb[0]) / 2;
+            const my = (sa[1] + sb[1]) / 2;
+            if (rs.c > 0 || rs.w > 0) {
+                if (rs.c > 0) {
+                    ctx.strokeStyle = COLORS.bad;
+                    ctx.lineWidth = 2;
+                    ctx.beginPath();
+                    ctx.moveTo(mx - 7, my - 7);
+                    ctx.lineTo(mx + 7, my + 7);
+                    ctx.moveTo(mx + 7, my - 7);
+                    ctx.lineTo(mx - 7, my + 7);
+                    ctx.stroke();
+                }
+                ctx.fillStyle = rs.c > 0 ? COLORS.bad : COLORS.transit;
+                ctx.font = '600 10px ui-monospace, monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(rs.c > 0 ? `${rw.names[rs.e]} LEZÁRVA ${fmtTime(rs.c)}` : `${rw.names[rs.e]} LEZÁR ${rs.w}s`, mx, my + widthPx + 14);
             }
             // aktív vég: billentyűszám + név a küszöb előtt
             const lx = sa[0] - ax * (widthPx + 14);
             const ly = sa[1] - ay * (widthPx + 14);
             ctx.fillStyle = '#0e1622';
-            ctx.strokeStyle = COLORS.arr;
+            ctx.strokeStyle = rs.c > 0 ? COLORS.muted : COLORS.arr;
             ctx.lineWidth = 1.2;
             ctx.beginPath();
             ctx.arc(lx, ly, 9, 0, Math.PI * 2);
@@ -793,46 +1059,44 @@
             ctx.fillText(String(i + 1), lx, ly);
             ctx.fillStyle = '#e6ecf4';
             ctx.font = '600 10px ui-monospace, monospace';
-            ctx.fillText(rw.names[end], lx - ax * 20, ly - ay * 20);
+            ctx.fillText(rw.names[rs.e], lx - ax * 20, ly - ay * 20);
             ctx.textBaseline = 'alphabetic';
             runwayLabelHits.push({ index: i, x: lx, y: ly });
         });
     }
 
+    // ---------- kapuk ----------
     function drawGates() {
         if (!state.info) return;
         for (const g of state.info.gates) {
-            const [sx, sy] = toScreen(...g.pos);
-            ctx.fillStyle = '#0e1622';
-            ctx.strokeStyle = 'rgba(201,212,227,0.55)';
+            let [sx, sy] = toScreen(...g.pos);
+            sx = Math.max(20, Math.min(W - 20, sx));
+            sy = Math.max(20, Math.min(H - 20, sy));
+            ctx.fillStyle = 'rgba(14,22,34,0.9)';
+            ctx.strokeStyle = 'rgba(201,212,227,0.6)';
             ctx.lineWidth = 1.5;
             ctx.beginPath();
-            ctx.arc(sx, sy, 17, 0, Math.PI * 2);
+            ctx.arc(sx, sy, 18, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
             ctx.fillStyle = COLORS.text;
-            ctx.font = '600 15px system-ui, sans-serif';
+            ctx.font = '600 16px system-ui, sans-serif';
             ctx.textAlign = 'center';
             ctx.textBaseline = 'middle';
             ctx.fillText(g.letter, sx, sy + 1);
             ctx.textBaseline = 'alphabetic';
-            // a fix neve a kör belső oldalára kerül
-            const sinB = Math.sin(g.bearing * Math.PI / 180);
-            const cosB = Math.cos(g.bearing * Math.PI / 180);
+            // a fix neve a kapu belső oldalára
+            const [cx, cy] = toScreen(0, 0);
+            const vx = cx - sx;
+            const vy = cy - sy;
+            const vl = Math.hypot(vx, vy) || 1;
             ctx.fillStyle = COLORS.muted;
-            ctx.font = '11px ui-monospace, monospace';
-            if (sinB > 0.3) {
-                ctx.textAlign = 'right';
-                ctx.fillText(g.name, sx - 24, sy + cosB * 26 + 4);
-            } else if (sinB < -0.3) {
-                ctx.textAlign = 'left';
-                ctx.fillText(g.name, sx + 24, sy + cosB * 26 + 4);
-            } else {
-                ctx.fillText(g.name, sx, sy + (cosB > 0 ? 32 : -26));
-            }
+            ctx.font = '600 11px ui-monospace, monospace';
+            ctx.fillText(g.name, sx + (vx / vl) * 38, sy + (vy / vl) * 38 + 4);
         }
     }
 
+    // ---------- gépek ----------
     function drawPlane(sx, sy, hdg, color, size) {
         ctx.save();
         ctx.translate(sx, sy);
@@ -860,31 +1124,34 @@
         ctx.restore();
     }
 
-    function drawRoute(a, color) {
-        const pts = [[a.x, a.y], ...routeFor(a), ...routeEnd(a)];
-        const scr = pts.map((p) => toScreen(...p));
+    function drawRoute(a, color, faded) {
+        const p = posOf(a);
+        const pts = [[p.x, p.y], ...routeFor(a), ...routeEnd(a)];
+        const scr = pts.map((q) => toScreen(...q));
         ctx.strokeStyle = color;
-        ctx.globalAlpha = 0.85;
+        ctx.globalAlpha = faded ? 0.3 : 0.85;
         ctx.lineWidth = 1.5;
         ctx.setLineDash([6, 5]);
         ctx.beginPath();
         scr.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
         ctx.stroke();
         ctx.setLineDash([]);
-        routeFor(a).forEach((p, i) => {
-            const [x, y] = toScreen(...p);
-            ctx.fillStyle = '#0e1622';
-            ctx.beginPath();
-            ctx.arc(x, y, 7, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.stroke();
-            ctx.fillStyle = color;
-            ctx.font = '9px ui-monospace, monospace';
-            ctx.textAlign = 'center';
-            ctx.textBaseline = 'middle';
-            ctx.fillText(String(i + 1), x, y + 0.5);
-            ctx.textBaseline = 'alphabetic';
-        });
+        if (!faded) {
+            routeFor(a).forEach((q, i) => {
+                const [x, y] = toScreen(...q);
+                ctx.fillStyle = '#0e1622';
+                ctx.beginPath();
+                ctx.arc(x, y, 7, 0, Math.PI * 2);
+                ctx.fill();
+                ctx.stroke();
+                ctx.fillStyle = color;
+                ctx.font = '9px ui-monospace, monospace';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillText(String(i + 1), x, y + 0.5);
+                ctx.textBaseline = 'alphabetic';
+            });
+        }
         ctx.globalAlpha = 1;
     }
 
@@ -893,26 +1160,29 @@
         const k = scale();
         const players = state.room ? state.room.players : [];
         const multi = players.length > 1 && state.room.settings.mode !== 'free';
-        for (const a of state.snap.aircraft) {
-            if (a.st === 'ground') continue;
-            const [sx, sy] = toScreen(a.x, a.y);
-            const color = COLORS[a.k];
+        const showAll = rules().showAllRoutes;
+        const alt = rules().altitude;
+        const airborne = state.snap.aircraft.filter((a) => a.st !== 'ground');
+        if (showAll) for (const a of airborne) if (a.id !== state.selected) drawRoute(a, acColor(a), true);
+        for (const a of airborne) {
+            const p = posOf(a);
+            const [sx, sy] = toScreen(p.x, p.y);
+            const color = acColor(a);
             const mine = canControl(a);
-            ctx.globalAlpha = multi && !mine ? 0.45 : 1;
+            const baseAlpha = multi && !mine ? 0.45 : 1;
+            ctx.globalAlpha = baseAlpha;
 
-            // nyom
             const tr = state.trails.get(a.id) || [];
             ctx.fillStyle = color;
-            tr.forEach((p, i) => {
-                const [tx, ty] = toScreen(...p);
-                ctx.globalAlpha = (multi && !mine ? 0.45 : 1) * (0.15 + i * 0.08);
+            tr.forEach((q, i) => {
+                const [tx, ty] = toScreen(...q);
+                ctx.globalAlpha = baseAlpha * (0.15 + i * 0.08);
                 ctx.beginPath();
                 ctx.arc(tx, ty, 1.6, 0, Math.PI * 2);
                 ctx.fill();
             });
-            ctx.globalAlpha = multi && !mine ? 0.45 : 1;
+            ctx.globalAlpha = baseAlpha;
 
-            // konfliktus
             if (a.cf) {
                 const pulse = 0.5 + 0.5 * Math.sin(now / 160);
                 ctx.strokeStyle = COLORS.bad;
@@ -922,23 +1192,21 @@
                 ctx.stroke();
             }
 
-            // mások kijelölése
-            for (const p of players) {
-                if (p.id === state.me || p.selected !== a.id) continue;
-                ctx.strokeStyle = p.color;
+            for (const pl of players) {
+                if (pl.id === state.me || pl.selected !== a.id) continue;
+                ctx.strokeStyle = pl.color;
                 ctx.lineWidth = 2;
                 ctx.beginPath();
                 ctx.arc(sx, sy, 15, 0, Math.PI * 2);
                 ctx.stroke();
-                ctx.fillStyle = p.color;
+                ctx.fillStyle = pl.color;
                 ctx.font = '10px system-ui, sans-serif';
                 ctx.textAlign = 'center';
-                ctx.fillText(p.name, sx, sy + 27);
+                ctx.fillText(pl.name, sx, sy + 27);
             }
 
-            // kijelölés
             if (state.selected === a.id) {
-                drawRoute(a, color);
+                drawRoute(a, color, false);
                 ctx.strokeStyle = '#ffffff';
                 ctx.lineWidth = 1.5;
                 ctx.beginPath();
@@ -950,26 +1218,34 @@
                 ctx.stroke();
             }
 
-            drawPlane(sx, sy, a.h, color, a.c === 'wide' ? 10 : a.c === 'turboprop' ? 7.5 : 8.5);
+            drawPlane(sx, sy, p.h, color, a.c === 'wide' ? 10 : a.c === 'turboprop' ? 7.5 : 8.5);
 
             // adatblokk
-            const lines = [
-                `${a.cs} ${KIND_LABEL[a.k]}${a.k === 'arr' && a.rw != null ? ` ${runwayLabel(a.rw)}` : ''}${a.k !== 'arr' ? ` →${a.eg}` : ''}`,
-                `${fl(a.al)}${a.ta > a.al + 50 ? '↑' : a.ta < a.al - 50 ? '↓' : ' '}${a.ta !== a.al ? fl(a.ta) : '   '} ${a.s}kt${a.hd ? ' ⟳' : ''}`
-            ];
+            let line1 = `${a.cs} ${a.em != null ? 'VÉSZ' : KIND_LABEL[a.k]}`;
+            if (a.k === 'arr' && a.rw != null) line1 += ` ${runwayLabel(a.rw)}`;
+            if (a.k !== 'arr') line1 += ` →${a.eg}`;
+            let line2;
+            if (alt) {
+                line2 = `${fl(a.al)}${a.ta > a.al + 50 ? '↑' : a.ta < a.al - 50 ? '↓' : ' '}${a.ta !== a.al ? fl(a.ta) : '   '} ${a.s}kt`;
+                if (a.xa && a.k !== 'arr') line2 += ` ki:${a.xa / 100}`;
+            } else {
+                line2 = `${a.s}kt`;
+            }
+            if (a.hd) line2 += ' ⟳';
+            const lines = [line1, line2];
             ctx.font = '11px ui-monospace, monospace';
             const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 10;
             const bx = sx + 16;
             const by = sy - 30;
             ctx.fillStyle = 'rgba(14,22,34,0.82)';
             ctx.fillRect(bx, by, w, 30);
-            ctx.strokeStyle = a.cf ? COLORS.bad : 'rgba(201,212,227,0.25)';
+            ctx.strokeStyle = a.cf ? COLORS.bad : a.em != null ? COLORS.em : 'rgba(201,212,227,0.25)';
             ctx.lineWidth = 1;
             ctx.strokeRect(bx + 0.5, by + 0.5, w - 1, 29);
             if (multi) {
                 const owners = Rules.ownersOf(a, state.room.settings, players);
-                owners.slice(0, 3).forEach((p, i) => {
-                    ctx.fillStyle = p.color;
+                owners.slice(0, 3).forEach((pl, i) => {
+                    ctx.fillStyle = pl.color;
                     ctx.fillRect(bx, by + i * (30 / Math.min(3, owners.length)), 3, 30 / Math.min(3, owners.length));
                 });
             }
@@ -978,7 +1254,10 @@
             ctx.fillText(lines[0], bx + 6, by + 12);
             ctx.fillStyle = COLORS.text;
             ctx.fillText(lines[1], bx + 6, by + 25);
-            if (a.f < 90 && a.st !== 'rollout') {
+            if (a.em != null) {
+                ctx.fillStyle = COLORS.em;
+                ctx.fillText(`VÉSZ ${fmtTime(a.em)}`, bx + 6, by + 40);
+            } else if (a.f < 90 && a.st !== 'rollout') {
                 ctx.fillStyle = COLORS.bad;
                 ctx.fillText(`ÜZEMANYAG ${a.f}s`, bx + 6, by + 40);
             }
@@ -987,12 +1266,14 @@
     }
 
     function frame(now) {
+        updateDisplay(now);
         ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
         ctx.fillStyle = '#0e1622';
         ctx.fillRect(0, 0, W, H);
         if (state.info) {
-            drawGrid();
+            drawBackground();
             drawSectors();
+            drawStorms(now);
             drawRunways();
             drawGates();
             drawAircraft(now);
@@ -1012,7 +1293,8 @@
         return state.snap.aircraft
             .filter((a) => a.st !== 'ground')
             .map((a) => {
-                const [x, y] = toScreen(a.x, a.y);
+                const p = posOf(a);
+                const [x, y] = toScreen(p.x, p.y);
                 return { a, d: Math.hypot(x - sx, y - sy) };
             })
             .filter((h) => h.d < 16)
@@ -1030,7 +1312,8 @@
     }
 
     function segmentAt(a, sx, sy) {
-        const pts = [[a.x, a.y], ...routeFor(a), ...routeEnd(a).slice(0, 1)].map((p) => toScreen(...p));
+        const p = posOf(a);
+        const pts = [[p.x, p.y], ...routeFor(a), ...routeEnd(a).slice(0, 1)].map((q) => toScreen(...q));
         for (let i = 0; i < pts.length - 1; i++) {
             const [ax, ay] = pts[i];
             const [bx, by] = pts[i + 1];
@@ -1059,7 +1342,6 @@
         if (!state.snap) return;
         const sel = state.selected != null ? state.acById.get(state.selected) : null;
 
-        // kifutó irányának fordítása
         if (e.shiftKey) {
             const hit = runwayLabelHits.find((h) => Math.hypot(h.x - sx, h.y - sy) < 11);
             if (hit) {
@@ -1100,12 +1382,11 @@
                 if (sel.st === 'ground') addLog('warn', `${sel.cs} még a földön van – előbb szállj fel vele (X).`);
                 return;
             }
-            const R = state.info.radius;
-            if (Math.hypot(x, y) > R + 1) return;
+            const as = airspace();
+            if (Math.abs(x) > as.hw + 0.5 || Math.abs(y) > as.hh + 0.5) return;
             if (e.shiftKey) cmd('replaceRoute', { id: sel.id, x, y });
             else cmd('addWaypoint', { id: sel.id, x, y });
-            // azonnali visszajelzés
-            sel.r = e.shiftKey ? [[x, y]] : sel.r;
+            if (e.shiftKey) sel.r = [[x, y]];
             return;
         }
         select(null);
@@ -1152,10 +1433,8 @@
                 cmd('removeWaypoint', { id: d.id, index: d.index });
                 if (state.localRoute) state.localRoute.route.splice(d.index, 1);
             }
-            // a következő pillanatképig a helyi útvonalat mutatjuk
             setTimeout(() => { if (!state.drag) state.localRoute = null; }, 350);
         } else if (d.type === 'seg' && !d.moved) {
-            // egyszerű kattintás a szakaszon: útpont oda
             const [x, y] = toWorld(...canvasPos(e));
             cmd('addWaypoint', { id: d.id, x, y, index: d.index });
         }
@@ -1165,7 +1444,7 @@
         e.preventDefault();
         const [sx, sy] = canvasPos(e);
         const before = toWorld(sx, sy);
-        state.view.zoom = Math.max(0.6, Math.min(8, state.view.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+        state.view.zoom = Math.max(0.7, Math.min(8, state.view.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
         const after = toWorld(sx, sy);
         state.view.panX += after[0] - before[0];
         state.view.panY += after[1] - before[1];
@@ -1192,9 +1471,7 @@
         }
         if (!list.length) return;
         const cur = list.findIndex((a) => a.id === state.selected);
-        let idx;
-        if (cur < 0) idx = 0;
-        else idx = (cur + (backwards ? -1 : 1) + list.length) % list.length;
+        const idx = cur < 0 ? 0 : (cur + (backwards ? -1 : 1) + list.length) % list.length;
         select(list[idx].id);
     }
 
@@ -1268,10 +1545,16 @@
         $('btn-end').onclick = () => {
             if (confirm('Biztosan befejezed a műszakot?')) send({ t: 'end' });
         };
+        const soundIcon = { on: '🔊', quiet: '🔉', off: '🔇' };
+        $('btn-sound').textContent = soundIcon[Sound.level()];
+        $('btn-sound').onclick = () => {
+            const lvl = Sound.cycle();
+            $('btn-sound').textContent = soundIcon[lvl];
+            addLog('info', `Hangjelzések: ${{ on: 'bekapcsolva', quiet: 'halkan', off: 'kikapcsolva' }[lvl]}.`);
+        };
         $('btn-help').onclick = () => { $('help').hidden = false; };
         $('help-close').onclick = () => { $('help').hidden = true; };
         $('help').onclick = (e) => { if (e.target.id === 'help') $('help').hidden = true; };
-        $('btn-again').onclick = () => send({ t: 'restart' });
         $('btn-sum-close').onclick = () => { $('summary').hidden = true; };
         $('log-toggle').onclick = () => {
             const h = $('log-history');
@@ -1284,7 +1567,7 @@
     // ---------- indulás ----------
     async function main() {
         resize();
-        window.addEventListener('resize', resize);
+        window.addEventListener('resize', () => { resize(); bg.key = ''; });
         bindLobby();
         bindSidebar();
         requestAnimationFrame(frame);

@@ -1,4 +1,4 @@
-// Légtér – multiplayer jogosultsági szabályok. Szerveren és böngészőben is fut.
+// Légtér – multiplayer jogosultsági szabályok és a műszak-beállítások leírása. Szerveren és böngészőben is fut.
 (function (root, factory) {
     if (typeof module === 'object' && module.exports) module.exports = factory();
     else root.LegterRules = factory();
@@ -19,6 +19,119 @@
 
     const TOWER_RADIUS = 4;
 
+    // ---------- műszak-szabályok ----------
+    const RULE_GROUPS = [
+        { key: 'workload', label: 'Munkaterhelés' },
+        { key: 'events', label: 'Események' },
+        { key: 'help', label: 'Segítség' }
+    ];
+
+    const RULE_DEFS = [
+        {
+            key: 'altitude', group: 'workload', label: 'Magasság',
+            desc: 'A magasság is számít: az érkezőket süllyesztened, az indulókat és átrepülőket emelned kell. 1000 láb különbség is elég az elkülönítéshez.',
+            off: 1, on: 1.2
+        },
+        {
+            key: 'manualRouting', group: 'workload', label: 'Indulók és átrepülők útvonala kézzel',
+            desc: 'Felszállás és belépés után egyenesen repülnek, amíg útpontot nem adsz nekik a kapujuk felé.',
+            off: 1, on: 1.2
+        },
+        {
+            key: 'pauseQueue', group: 'workload', label: 'Szünetben a parancsok várnak',
+            desc: 'Szünet közben is tervezhetsz, de a parancsok csak a folytatáskor lépnek életbe.',
+            off: 1, on: 1.05
+        },
+        {
+            key: 'randomGates', group: 'workload', label: 'Véletlen kapuk',
+            desc: 'Minden műszakban 4–6 kapu, új helyen, valódi fixpontokról elnevezve.',
+            off: 1, on: 1.1
+        },
+        {
+            key: 'constraints', group: 'events', label: 'Kifutó-ellenőrzések',
+            desc: 'Időnként egy kifutót egy perc figyelmeztetés után néhány percre lezárnak.',
+            off: 0.9, on: 1
+        },
+        {
+            key: 'emergencies', group: 'events', label: 'Vészhelyzetek',
+            desc: 'Egy érkező vészhelyzetet jelenthet: lassabb, és 6 percen belül le kell szállnia.',
+            off: 0.95, on: 1
+        },
+        {
+            key: 'storms', group: 'events', label: 'Zivatarok',
+            desc: 'Zivatarcellák sodródnak át a légtéren. A zöld és sárga rész átrepülhető, a piros mag incidens.',
+            off: 0.9, on: 1
+        },
+        {
+            key: 'showAllRoutes', group: 'help', label: 'Minden útvonal látszik',
+            desc: 'Az összes gép tervezett útvonala halványan kirajzolódik, nem csak a kijelölté.',
+            off: 1, on: 0.6
+        }
+    ];
+
+    const PRESETS = {
+        classic: {
+            label: 'Klasszikus',
+            rules: { altitude: false, manualRouting: false, pauseQueue: false, randomGates: false, constraints: true, emergencies: true, storms: true, showAllRoutes: false }
+        },
+        hard: {
+            label: 'Nehéz',
+            rules: { altitude: true, manualRouting: true, pauseQueue: true, randomGates: true, constraints: true, emergencies: true, storms: true, showAllRoutes: false }
+        }
+    };
+
+    const TRAFFIC_LEVELS = { 50: 0.5, 75: 0.75, 100: 1, 125: 1.25, 150: 1.5 };
+
+    const PRACTICE = {
+        all: 'Teljes forgalom',
+        arr: 'Csak érkezők',
+        dep: 'Csak indulók',
+        transit: 'Csak átrepülők'
+    };
+
+    const OPENINGS = {
+        busy: { label: 'Gyors kezdés', desc: 'Három induló vár, és az első percben sorban jönnek az érkezők.' },
+        gentle: { label: 'Lassú kezdés', desc: 'Egy induló, a forgalom fokozatosan erősödik.' }
+    };
+
+    function defaultShift() {
+        return {
+            rules: Object.assign({}, PRESETS.classic.rules),
+            traffic: 100,
+            practice: 'all',
+            opening: 'busy'
+        };
+    }
+
+    // a klienstől jövő beállítások ellenőrzése
+    function normalizeShift(input) {
+        const out = defaultShift();
+        if (!input || typeof input !== 'object') return out;
+        if (input.rules && typeof input.rules === 'object') {
+            for (const def of RULE_DEFS) {
+                if (typeof input.rules[def.key] === 'boolean') out.rules[def.key] = input.rules[def.key];
+            }
+        }
+        if (TRAFFIC_LEVELS[input.traffic]) out.traffic = Number(input.traffic);
+        if (PRACTICE[input.practice]) out.practice = input.practice;
+        if (OPENINGS[input.opening]) out.opening = input.opening;
+        return out;
+    }
+
+    function presetOf(rules) {
+        for (const [key, p] of Object.entries(PRESETS)) {
+            if (RULE_DEFS.every((d) => !!rules[d.key] === !!p.rules[d.key])) return key;
+        }
+        return 'custom';
+    }
+
+    function scoreMultiplier(shift) {
+        let m = TRAFFIC_LEVELS[shift.traffic] || 1;
+        for (const def of RULE_DEFS) m *= shift.rules[def.key] ? def.on : def.off;
+        return Math.round(m * 100) / 100;
+    }
+
+    // ---------- jogosultságok ----------
     function sectorCount(players) {
         let max = 1;
         for (const p of players) max = Math.max(max, (p.sector || 0) + 1);
@@ -57,5 +170,10 @@
         return players.filter((p) => canControl(ac, p, settings, players));
     }
 
-    return { MODES, ROLES, TOWER_RADIUS, sectorCount, sectorOf, inTowerZone, canControl, ownersOf };
+    return {
+        MODES, ROLES, TOWER_RADIUS,
+        RULE_GROUPS, RULE_DEFS, PRESETS, TRAFFIC_LEVELS, PRACTICE, OPENINGS,
+        defaultShift, normalizeShift, presetOf, scoreMultiplier,
+        sectorCount, sectorOf, inTowerZone, canControl, ownersOf
+    };
 }));
