@@ -1551,17 +1551,81 @@
         ctx.restore();
     }
 
-    function drawRoute(a, color, faded) {
-        const p = posOf(a);
+    // A gép várható pályája ívekkel: a böngésző végigszámolja, merre repül a gép a saját fordulási ívével
+    // (a sebességéből és fordulási képességéből adódó sugárral), ugyanúgy, ahogy a szerver vezeti.
+    // Eredmény: mintapontok, mindegyiknél a szakasz sorszáma (melyik célpont felé tart), a húzáshoz.
+    function predictPath(a) {
+        const out = [];
+        const ts = state.info.timeScale;
+        const rate = 3 * ts * (hasPerk('agile') ? 1.25 : 1) * Math.PI / 180;   // rad/s
+        const v = Math.max(a.s || 0, 140) * ts / 3600;                           // nm/s
+        const radius = v / rate;
+        const route = routeFor(a);
+        const end = routeEnd(a);
+        let x;
+        let y;
+        let h;
         const prefix = departurePrefix(a);
-        const pts = [...(prefix || [[p.x, p.y]]), ...routeFor(a), ...routeEnd(a)];
-        const scr = pts.map((q) => toScreen(...q));
+        if (prefix) {
+            // felszállás: a kifutón végig egyenesen, majd a kifutó vége után 1 nm egyenes emelkedés
+            prefix.forEach((q) => out.push({ x: q[0], y: q[1], seg: -1 }));
+            [x, y] = prefix[prefix.length - 1];
+            const a0 = prefix[prefix.length - 2];
+            h = Math.atan2(x - a0[0], y - a0[1]);
+        } else {
+            const p = posOf(a);
+            x = p.x;
+            y = p.y;
+            h = (p.h || 0) * Math.PI / 180;
+            out.push({ x, y, seg: 0 });
+        }
+        // célpontok: útpontok, majd a vég (érkezőnél a csatlakozás és a tengely pontjai, egyébként a kapu)
+        const targets = route.map((q, i) => ({ p: q, seg: i, sw: 0.6 }));
+        if (a.k === 'arr' && end.length) {
+            const thr = end[end.length - 1];
+            const approach = end.slice(0, -1);
+            approach.forEach((q, i) => targets.push({ p: q, seg: route.length + i, sw: i === approach.length - 1 ? 0.25 : 0.6 }));
+            // a csatlakozástól a küszöbig a tengely pontjai, hogy a ráfordulás íve is látsszon
+            const from = approach.length ? approach[approach.length - 1] : [x, y];
+            const n = Math.max(1, Math.round(Math.hypot(thr[0] - from[0], thr[1] - from[1]) / 0.5));
+            for (let i = 1; i <= n; i++) targets.push({ p: [from[0] + (thr[0] - from[0]) * i / n, from[1] + (thr[1] - from[1]) * i / n], seg: 99, sw: 0.15 });
+        } else {
+            end.forEach((q, i) => targets.push({ p: q, seg: route.length + i, sw: 0.6 }));
+        }
+        const ds = 0.06;
+        let steps = 0;
+        for (const t of targets) {
+            while (Math.hypot(t.p[0] - x, t.p[1] - y) > t.sw && steps < 1500) {
+                const want = Math.atan2(t.p[0] - x, t.p[1] - y);
+                let d = want - h;
+                while (d > Math.PI) d -= 2 * Math.PI;
+                while (d < -Math.PI) d += 2 * Math.PI;
+                const maxTurn = ds / radius;
+                h += Math.max(-maxTurn, Math.min(maxTurn, d));
+                x += Math.sin(h) * ds;
+                y += Math.cos(h) * ds;
+                if (steps % 3 === 0) out.push({ x, y, seg: t.seg });
+                steps++;
+            }
+        }
+        if (targets.length) {
+            const last = targets[targets.length - 1];
+            out.push({ x: last.p[0], y: last.p[1], seg: last.seg });
+        }
+        return out;
+    }
+
+    function drawRoute(a, color, faded) {
+        const path = predictPath(a);
         ctx.strokeStyle = color;
         ctx.globalAlpha = faded ? 0.3 : 0.85;
         ctx.lineWidth = 1.5;
         ctx.setLineDash([6, 5]);
         ctx.beginPath();
-        scr.forEach(([x, y], i) => (i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)));
+        path.forEach((q, i) => {
+            const [x, y] = toScreen(q.x, q.y);
+            if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y);
+        });
         ctx.stroke();
         ctx.setLineDash([]);
         if (!faded) {
@@ -1888,24 +1952,32 @@
         return -1;
     }
 
+    // a kirajzolt (íves) pálya melyik szakaszára kattintottak; a visszaadott szám az útpont beszúrási helye
     function segmentAt(a, sx, sy) {
-        const p = posOf(a);
-        const prefix = departurePrefix(a);
-        const start = prefix ? prefix[prefix.length - 1] : [p.x, p.y];
-        // érkezőnél a csatlakozási pontig minden szakasz húzható (a végső megközelítés nem), egyébként a kapuig
-        const end = routeEnd(a);
-        const tail = a.k === 'arr' ? end.slice(0, -1) : end;
-        const pts = [start, ...routeFor(a), ...tail].map((q) => toScreen(...q));
-        for (let i = 0; i < pts.length - 1; i++) {
-            const [ax, ay] = pts[i];
-            const [bx, by] = pts[i + 1];
+        const path = predictPath(a);
+        const route = routeFor(a);
+        let best = -1;
+        let bestD = 7 * hitScale();
+        for (let i = 0; i < path.length - 1; i++) {
+            const seg = path[i + 1].seg;
+            // a végső megközelítés (99) és a felszállási egyenes (-1) nem húzható
+            if (seg < 0 || seg === 99) continue;
+            if (a.k === 'arr' && seg > route.length + Math.max(0, (a.aj || []).length - 1)) continue;
+            const [ax, ay] = toScreen(path[i].x, path[i].y);
+            const [bx, by] = toScreen(path[i + 1].x, path[i + 1].y);
             const dx = bx - ax;
             const dy = by - ay;
             const len2 = dx * dx + dy * dy;
             const t = len2 ? Math.max(0, Math.min(1, ((sx - ax) * dx + (sy - ay) * dy) / len2)) : 0;
-            if (t > 0.05 && t < 0.95 && Math.hypot(sx - (ax + t * dx), sy - (ay + t * dy)) < 6 * hitScale()) return i;
+            const d = Math.hypot(sx - (ax + t * dx), sy - (ay + t * dy));
+            // a waypointok körüli kis területet a waypoint-húzás kapja
+            const nearWp = route.some((q) => { const [wx, wy] = toScreen(...q); return Math.hypot(sx - wx, sy - wy) < 10 * hitScale(); });
+            if (d < bestD && !nearWp) {
+                bestD = d;
+                best = Math.min(seg, route.length);
+            }
         }
-        return -1;
+        return best;
     }
 
     // a kifutó előtti szám vagy maga a kifutó a kattintás helyén
