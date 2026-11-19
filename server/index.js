@@ -17,7 +17,17 @@ const MAX_MESSAGES_PER_SECOND = 40;
 
 const app = express();
 app.disable('x-powered-by');
-const staticOptions = { maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0 };
+const staticOptions = { maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0, index: false };
+
+// Verzióazonosító: minden telepítésnél más, így a böngésző nem keveri a régi és az új fájlokat.
+const fs = require('fs');
+const BUILD_ID = (process.env.RENDER_GIT_COMMIT || String(Date.now())).slice(0, 12);
+const INDEX_HTML = fs.readFileSync(path.join(__dirname, '..', 'public', 'index.html'), 'utf8')
+    .replace(/(src|href)="(\/?(?:shared\/)?[\w-]+\.(?:js|css))"/g, `$1="$2?v=${BUILD_ID}"`);
+app.get(['/', '/index.html'], (req, res) => {
+    res.set('Cache-Control', 'no-cache');
+    res.type('html').send(INDEX_HTML);
+});
 app.use(express.static(path.join(__dirname, '..', 'public'), staticOptions));
 app.use('/shared', express.static(path.join(__dirname, '..', 'shared'), staticOptions));
 app.get('/api/airports', (req, res) => {
