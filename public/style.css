@@ -399,3 +399,18 @@ table.keys td:first-child { white-space: nowrap; }
 .handoff-req[hidden] { display: none; }
 .panel-head { gap: 10px; }
 .panel-head > span:last-child { text-align: right; }
+
+/* a felső sáv gépen és tableten mindig egy sor: így a radar mérete a lobbiban és a játékban ugyanaz */
+@media (min-width: 761px) and (orientation: landscape) {
+    #topbar { flex-wrap: nowrap; overflow: hidden; }
+    .tb-block, .tb-controls, .brand { flex: none; }
+    #tb-airport { max-width: 260px; overflow: hidden; text-overflow: ellipsis; display: block; }
+}
+@media (min-width: 761px) and (max-width: 1500px) and (orientation: landscape) {
+    .tb-room-block { display: none; }
+    .tb-stats { gap: 10px; }
+    .tb-stats .stat { font-size: 0; }
+    .tb-stats .stat b { font-size: 14px; }
+    .tb-stats .stat.score-c { font-size: 12px; }
+    .tb-stats .stat:not(.score-c) b::after { content: attr(data-label); font: 11px var(--sans); color: var(--muted); margin-left: 3px; }
+}

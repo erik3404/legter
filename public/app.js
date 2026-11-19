@@ -692,7 +692,7 @@
             send({ t: 'join', code, name: getName() });
         };
         $('in-code').onkeydown = (e) => { if (e.key === 'Enter') $('btn-join').click(); };
-        $('btn-start').onclick = () => send({ t: 'start' });
+        $('btn-start').onclick = () => send({ t: 'start', aspect: radarAspect() });
         $('btn-leave').onclick = () => { location.href = location.pathname; };
         $('btn-copy').onclick = async () => {
             const link = `${location.origin}${location.pathname}?room=${state.room.code}`;
@@ -777,9 +777,27 @@
     }
 
     const airspace = () => (state.info ? state.info.airspace : { hw: 24, hh: 14 });
+    // a radar méretaránya (a légtér ehhez igazodik az induláskor)
+    function radarAspect() {
+        const r = $('scope-wrap').getBoundingClientRect();
+        return r.width > 0 && r.height > 0 ? Math.round((r.width / r.height) * 1000) / 1000 : undefined;
+    }
+
+    // a légtér pontosan kitölti a radart; ennél jobban nem lehet kicsinyíteni
     function scale() {
         const as = airspace();
-        return Math.min(W / (2 * (as.hw + 0.8)), H / (2 * (as.hh + 0.8))) * state.view.zoom;
+        return Math.min(W / (2 * as.hw), H / (2 * as.hh)) * state.view.zoom;
+    }
+
+    // nagyítás után a nézet nem csúszhat ki a légtérből
+    function clampView() {
+        const as = airspace();
+        state.view.zoom = Math.max(1, Math.min(8, state.view.zoom));
+        const k = scale();
+        const mx = Math.max(0, as.hw - W / (2 * k));
+        const my = Math.max(0, as.hh - H / (2 * k));
+        state.view.panX = Math.max(-mx, Math.min(mx, state.view.panX));
+        state.view.panY = Math.max(-my, Math.min(my, state.view.panY));
     }
     function toScreen(x, y) {
         const k = scale();
@@ -1617,6 +1635,7 @@
 
     function frame(now) {
         updateDisplay(now);
+        if (state.info) clampView();
         ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
         ctx.fillStyle = '#0e1622';
         ctx.fillRect(0, 0, W, H);
@@ -1830,7 +1849,7 @@
             const [p1, p2] = [...pointers.values()];
             const d = Math.hypot(p1[0] - p2[0], p1[1] - p2[1]) || 1;
             const mid = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
-            state.view.zoom = Math.max(0.7, Math.min(8, pinch.zoom * (d / pinch.d)));
+            state.view.zoom = Math.max(1, Math.min(8, pinch.zoom * (d / pinch.d)));
             const now = toWorld(...mid);
             state.view.panX += now[0] - pinch.world[0];
             state.view.panY += now[1] - pinch.world[1];
@@ -1904,7 +1923,7 @@
         e.preventDefault();
         const [sx, sy] = canvasPos(e);
         const before = toWorld(sx, sy);
-        state.view.zoom = Math.max(0.7, Math.min(8, state.view.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
+        state.view.zoom = Math.max(1, Math.min(8, state.view.zoom * (e.deltaY < 0 ? 1.12 : 1 / 1.12)));
         const after = toWorld(sx, sy);
         state.view.panX += after[0] - before[0];
         state.view.panY += after[1] - before[1];

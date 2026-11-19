@@ -567,3 +567,18 @@ test('átadás: a megkapott gépet csak az új gazdája irányítja', () => {
     assert.deepStrictEqual(Rules.ownersOf(ac, { mode: 'roles' }, players).map((p) => p.id), [2]);
     assert.deepStrictEqual(Rules.ownersOf({ k: 'arr', st: 'airborne', ow: 9 }, { mode: 'roles' }, players).map((p) => p.id), [1], 'kilépett gazda');
 });
+
+test('a légtér a képernyő arányához igazodik, multiban nagyobb', () => {
+    const wide = new Sim('LOWW', { rules: QUIET }, { aspect: 2 });
+    assert.ok(Math.abs(wide.airspace.hw / wide.airspace.hh - 2) < 0.05);
+    const tall = new Sim('LOWW', { rules: QUIET }, { aspect: 0.6 });
+    assert.ok(tall.airspace.hh > tall.airspace.hw);
+    const solo = new Sim('LOWW', { rules: QUIET }, { aspect: 1.7, players: 1 });
+    const trio = new Sim('LOWW', { rules: QUIET }, { aspect: 1.7, players: 3 });
+    const area = (x) => x.airspace.hw * x.airspace.hh;
+    assert.ok(Math.abs(area(trio) / area(solo) - 1.3) < 0.05);
+    for (const g of trio.gates) {
+        const as = trio.airspace;
+        assert.ok(Math.abs(Math.abs(g.pos[0]) - as.hw) < 0.05 || Math.abs(Math.abs(g.pos[1]) - as.hh) < 0.05);
+    }
+});

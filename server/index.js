@@ -3,6 +3,7 @@
 const http = require('http');
 const path = require('path');
 const express = require('express');
+const compression = require('compression');
 const { WebSocketServer } = require('ws');
 const { Sim, AIRPORTS } = require('../shared/sim');
 const Rules = require('../shared/rules');
@@ -17,6 +18,7 @@ const MAX_MESSAGES_PER_SECOND = 40;
 
 const app = express();
 app.disable('x-powered-by');
+app.use(compression());
 const staticOptions = { maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0, index: false };
 
 // Verzióazonosító: minden telepítésnél más, így a böngésző nem keveri a régi és az új fájlokat.
@@ -203,7 +205,7 @@ function checkStart(room) {
 }
 
 function startGame(room) {
-    const opts = {};
+    const opts = { aspect: room.aspect, players: room.players.size };
     if (room.settings.mode === 'airports') {
         const count = Math.min(room.players.size, AIRPORTS[room.settings.airport].airports.length);
         opts.airportCount = count;
@@ -336,6 +338,8 @@ function handle(ws, msg) {
             if (!isHost || room.sim) break;
             const problem = checkStart(room);
             if (problem) return send(ws, { t: 'error', text: problem });
+            // a szobagazda radarjának méretaránya: ehhez igazodik a légtér alakja
+            if (Number.isFinite(msg.aspect)) room.aspect = Math.max(0.5, Math.min(3, msg.aspect));
             startGame(room);
             break;
         }

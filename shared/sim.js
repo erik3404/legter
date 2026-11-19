@@ -108,7 +108,16 @@ class Sim {
     constructor(airportIcao = 'LOWW', shift = {}, opts = {}) {
         const ap = AIRPORTS[airportIcao] || AIRPORTS.LOWW;
         this.airport = ap;
-        this.airspace = ap.airspace || AIRSPACE;
+        // A légtér a képernyő arányához igazodik (opts.aspect = szélesség / magasság),
+        // multiban játékosonként +15% terület (legfeljebb +30%).
+        const base = ap.airspace || AIRSPACE;
+        const grow = 1 + 0.15 * clamp((opts.players || 1) - 1, 0, 2);
+        const hw = Math.round(base.hw * Math.sqrt(grow) * 10) / 10;
+        const aspect = Number(opts.aspect);
+        const hh = Number.isFinite(aspect) && aspect > 0
+            ? Math.round(clamp(hw / clamp(aspect, 0.55, 2.6), base.hh * 0.7, hw * 1.4) * 10) / 10
+            : Math.round(base.hh * Math.sqrt(grow) * 10) / 10;
+        this.airspace = { hw, hh };
         // nagyobb légtérben arányosan több üzemanyag, hogy a leghosszabb út is beleférjen
         this.fuelScale = Math.max(1, (this.airspace.hw + this.airspace.hh) / (AIRSPACE.hw + AIRSPACE.hh));
         this.shift = Rules.normalizeShift(shift);

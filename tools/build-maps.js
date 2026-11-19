@@ -29,6 +29,21 @@ function projector(lat0, lon0) {
 
 function simplify(pts, tol) {
     if (pts.length < 3) return pts;
+    // zárt gyűrű (első = utolsó pont): a Douglas–Peucker itt mindent eldobna, ezért
+    // a legtávolabbi pontnál kettévágjuk, és a két félt külön egyszerűsítjük
+    const [fx, fy] = pts[0];
+    const [lx, ly] = pts[pts.length - 1];
+    if (fx === lx && fy === ly && pts.length > 3) {
+        let far = 1;
+        let farD = 0;
+        for (let i = 1; i < pts.length - 1; i++) {
+            const d = Math.hypot(pts[i][0] - fx, pts[i][1] - fy);
+            if (d > farD) { farD = d; far = i; }
+        }
+        const a = simplify(pts.slice(0, far + 1), tol);
+        const b = simplify(pts.slice(far), tol);
+        return a.concat(b.slice(1));
+    }
     const keep = new Uint8Array(pts.length);
     keep[0] = keep[pts.length - 1] = 1;
     const stack = [[0, pts.length - 1]];
@@ -163,7 +178,7 @@ function polylines(features, proj, lat0, lon0, propsFn) {
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
 for (const ap of Object.values(AIRPORTS)) {
-    BOX = ap.cluster ? 44 : 34;
+    BOX = ap.cluster ? 54 : 40;
     const proj = projector(ap.lat, ap.lon);
     const map = {
         source: 'Natural Earth (public domain); terep: openScope (MIT)',
