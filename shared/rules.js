@@ -8,8 +8,8 @@
     // A multi menü sorrendje: a két fő mód elöl.
     const MODES = {
         airports: {
-            label: 'Saját reptér (2–3 fő)', maxPlayers: 3, needsCluster: true,
-            desc: 'Egy pálya több repülőtérrel: ahányan vagytok (legfeljebb 3), annyi reptér él, és mindenki csak a saját repterének gépeit irányítja.'
+            label: 'Saját reptér (2–3 fő)', maxPlayers: 3,
+            desc: 'Ahányan vagytok, annyi reptér él a pályán (a fő reptér és a közeli társrepterei), és mindenki csak a saját repterének gépeit irányítja.'
         },
         positions: {
             label: 'Bevezető – Torony – Kivezető (2–3 fő)', maxPlayers: 3, roles: 'positions',
@@ -230,7 +230,11 @@
         if (mode === 'free' || !player || players.length < 2) return true;
         // átadással kapott gép: csak az új gazdája irányítja
         if (ac.ow != null && players.some((p) => p.id === ac.ow)) return player.id === ac.ow;
-        if (mode === 'airports') return (ac.ap || 0) === (player.airport || 0);
+        if (mode === 'airports') {
+            // gazdátlan reptér gépeit bárki irányíthatja
+            if (!players.some((p) => (p.airport || 0) === (ac.ap || 0))) return true;
+            return (ac.ap || 0) === (player.airport || 0);
+        }
         if (mode === 'roles' || mode === 'positions') {
             let needed = neededRole(ac, mode);
             // ha senkinél nincs ügyeletes poszt, a különleges gép a típusa szerinti irányítóé

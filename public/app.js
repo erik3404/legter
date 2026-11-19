@@ -712,8 +712,9 @@
         $('airport-cards').innerHTML = airportsCache.map((a) => `
             <button class="ap-card ${r.settings.airport === a.icao ? 'on' : ''}" data-icao="${a.icao}" ${host ? '' : 'disabled'}>
                 <span class="ap-code">${a.icao}</span>
-                <span><div class="ap-name">${esc(a.name)}${a.cluster ? '<span class="ap-tag">MULTI</span>' : ''}</div>
-                <div class="ap-desc">${esc(a.cluster ? `${a.airports.map((x) => `${x.icao} ${x.name}`).join(', ')}. Ahányan vagytok (max. ${a.airports.length}), annyi reptér él.` : (AIRPORT_DESC[a.icao] || `${a.runways} kifutó`))}</div></span>
+                <span><div class="ap-name">${esc(a.name)}</div>
+                <div class="ap-desc">${esc(AIRPORT_DESC[a.icao] || `${a.runways} kifutó`)}</div>
+                ${!r.settings.solo && a.airports.length > 1 ? `<div class="ap-multi">Multiban: ${a.airports.slice(1, Math.min(3, r.settings.size)).map((x) => `+ ${esc(x.icao)} ${esc(x.name)}`).join(', ') || 'csak a fő reptér (1 fő)'}</div>` : ''}</span>
             </button>`).join('');
 
         // előbeállítások
@@ -753,11 +754,11 @@
         $('rs-offset').value = r.settings.sectorOffset;
         $('rs-offset-field').style.display = r.settings.mode === 'sector' ? '' : 'none';
         const mode = Rules.MODES[r.settings.mode];
-        const apInfo = airportsCache.find((x) => x.icao === r.settings.airport);
+        $('size-field').hidden = !!r.settings.solo;
+        $('size-seg').innerHTML = Array.from({ length: mode.maxPlayers }, (_, i) => i + 1).map((n) => `<button data-size="${n}" class="${r.settings.size === n ? 'on' : ''}" ${host && n >= r.players.length ? '' : 'disabled'}>${n} fő${n > 1 ? `<small>${Math.min(n, 3)} reptér</small>` : '<small>1 reptér</small>'}</button>`).join('');
         let warn = '';
         if (r.players.length > mode.maxPlayers) warn = `Ebben a módban legfeljebb ${mode.maxPlayers} fő játszhat – válassz másik módot.`;
-        else if (mode.needsCluster && !(apInfo && apInfo.cluster)) warn = 'Ehhez a módhoz MULTI jelzésű, többrepteres pályát válassz.';
-        else if (r.settings.mode === 'airports' && apInfo && r.players.length > apInfo.airports.length) warn = `Ezen a pályán csak ${apInfo.airports.length} reptér van.`;
+        else if (r.players.length > r.settings.size) warn = `Többen vagytok (${r.players.length}), mint a beállított létszám (${r.settings.size}).`;
         else if (Rules.roleProblems(r.settings.mode, r.players)) warn = `Posztok: ${Rules.roleProblems(r.settings.mode, r.players)}`;
         $('rs-mode-desc').innerHTML = `${esc(mode.desc)}${warn ? `<div class="mode-warn">⚠ ${esc(warn)}</div>` : ''}`;
         $('btn-start').disabled = !!warn;
@@ -772,7 +773,7 @@
                 sel = `<select data-pid="${p.id}" data-field="role" ${editable ? '' : 'disabled'}>${Object.entries(set).map(([k, v]) => `<option value="${k}" ${p.role === k ? 'selected' : ''}>${v}</option>`).join('')}</select>`;
             } else if (r.settings.mode === 'airports') {
                 const ap = airportsCache.find((x) => x.icao === r.settings.airport);
-                const list = ap && ap.cluster ? ap.airports : [];
+                const list = ap ? ap.airports.slice(0, Math.min(3, r.settings.size)) : [];
                 sel = `<select data-pid="${p.id}" data-field="airport" ${editable ? '' : 'disabled'}>${list.map((x, i) => `<option value="${i}" ${p.airport === i ? 'selected' : ''}>${x.icao} ${esc(x.name)}</option>`).join('')}</select>`;
             } else if (r.settings.mode === 'sector') {
                 sel = `<select data-pid="${p.id}" data-field="sector" ${editable ? '' : 'disabled'}>${Array.from({ length: Math.max(n, 6) }, (_, i) => `<option value="${i}" ${p.sector === i ? 'selected' : ''}>${i + 1}. szektor</option>`).join('')}</select>`;
@@ -795,9 +796,9 @@
         if (params.get('room')) $('in-code').value = params.get('room').toUpperCase();
         $('btn-solo').onclick = () => {
             soloPending = true;
-            send({ t: 'create', name: getName(), settings: { mode: 'free' } });
+            send({ t: 'create', name: getName(), settings: { mode: 'free', solo: true } });
         };
-        $('btn-create').onclick = () => send({ t: 'create', name: getName(), settings: { mode: 'airports', airport: 'LONDON' } });
+        $('btn-create').onclick = () => send({ t: 'create', name: getName(), settings: { mode: 'airports', size: 2 } });
         $('btn-join').onclick = () => {
             const code = $('in-code').value.trim().toUpperCase();
             if (code.length !== 4) {
@@ -856,6 +857,10 @@
             settings: { mode: $('rs-mode').value, sectorOffset: Number($('rs-offset').value) }
         });
         $('rs-mode').onchange = pushMulti;
+        $('size-seg').onclick = (e) => {
+            const b = e.target.closest('[data-size]');
+            if (b && isHost()) send({ t: 'settings', settings: { size: Number(b.dataset.size) } });
+        };
         $('rs-offset').onchange = pushMulti;
         $('room-players').onchange = (e) => {
             const s = e.target;
@@ -1021,11 +1026,17 @@
         bg.key = '';
     }
 
+    // a térkép a fő reptérhez van igazítva; multiban a légtér középpontja eltolódik
+    function mapPt(p) {
+        const off = (state.info && state.info.mapOffset) || [0, 0];
+        return toScreen(p[0] - off[0], p[1] - off[1]);
+    }
+
     function tracePoly(c, rings) {
         c.beginPath();
         for (const ring of rings) {
             ring.forEach((p, i) => {
-                const [x, y] = toScreen(p[0], p[1]);
+                const [x, y] = mapPt(p);
                 if (i) c.lineTo(x, y); else c.moveTo(x, y);
             });
             c.closePath();
@@ -1063,22 +1074,23 @@
             c.lineWidth = Math.max(1.5, 0.12 * k);
             for (const r of m.rivers) {
                 c.beginPath();
-                r.p.forEach((p, i) => { const [x, y] = toScreen(p[0], p[1]); if (i) c.lineTo(x, y); else c.moveTo(x, y); });
+                r.p.forEach((p, i) => { const [x, y] = mapPt(p); if (i) c.lineTo(x, y); else c.moveTo(x, y); });
                 c.stroke();
             }
             for (const road of m.roads) {
                 c.strokeStyle = road.m ? MAP_COLORS.roadMajor : MAP_COLORS.road;
                 c.lineWidth = road.m ? 1.6 : 1;
                 c.beginPath();
-                road.p.forEach((p, i) => { const [x, y] = toScreen(p[0], p[1]); if (i) c.lineTo(x, y); else c.moveTo(x, y); });
+                road.p.forEach((p, i) => { const [x, y] = mapPt(p); if (i) c.lineTo(x, y); else c.moveTo(x, y); });
                 c.stroke();
             }
             c.font = '600 11px ui-monospace, monospace';
             c.textAlign = 'center';
             c.fillStyle = MAP_COLORS.place;
+            const off = (state.info && state.info.mapOffset) || [0, 0];
             for (const pl of m.places) {
-                if (Math.abs(pl.x) > as.hw - 2 || Math.abs(pl.y) > as.hh - 1.5) continue;
-                const [x, y] = toScreen(pl.x, pl.y);
+                if (Math.abs(pl.x - off[0]) > as.hw - 2 || Math.abs(pl.y - off[1]) > as.hh - 1.5) continue;
+                const [x, y] = mapPt([pl.x, pl.y]);
                 c.fillRect(x - 1.5, y - 1.5, 3, 3);
                 c.fillText(pl.n.toUpperCase(), x, y - 6);
             }

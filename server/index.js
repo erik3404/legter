@@ -38,7 +38,7 @@ app.use(express.static(path.join(__dirname, '..', 'public'), staticOptions));
 app.use('/shared', express.static(path.join(__dirname, '..', 'shared'), staticOptions));
 app.get('/api/airports', (req, res) => {
     res.json(Object.values(AIRPORTS).map((a) => ({
-        icao: a.icao, name: a.name, runways: a.runways.length, cluster: !!a.cluster,
+        icao: a.icao, name: a.name, runways: a.runways.filter((r) => !r.airport).length,
         airports: (a.airports || []).map((x) => ({ icao: x.icao, name: x.name }))
     })));
 });
@@ -230,7 +230,10 @@ function createRoom(settings) {
         hostId: null,
         players: new Map(),
         settings: {
-            airport: AIRPORTS[settings.airport] ? settings.airport : 'LOWW',
+            airport: AIRPORTS[settings.airport] ? settings.airport : 'LHBP',
+            // létszám: ennyien játszhatnak, és ennyi reptér él (legfeljebb 3)
+            size: settings.solo ? 1 : Math.max(1, Math.min(6, Math.round(Number(settings.size) || 2))),
+            solo: !!settings.solo,
             mode: Rules.MODES[settings.mode] ? settings.mode : 'free',
             sectorOffset: 0,
             shift: Rules.normalizeShift(settings.shift)
@@ -250,19 +253,17 @@ function checkStart(room) {
     const mode = Rules.MODES[room.settings.mode];
     const n = room.players.size;
     if (n > mode.maxPlayers) return `A(z) „${mode.label}” módban legfeljebb ${mode.maxPlayers} fő játszhat.`;
+    if (n > room.settings.size) return `Többen vagytok (${n}), mint a beállított létszám (${room.settings.size}).`;
     const roleIssue = Rules.roleProblems(room.settings.mode, publicPlayers(room));
     if (roleIssue) return `Posztok: ${roleIssue}`;
-    if (mode.needsCluster && !AIRPORTS[room.settings.airport].cluster) {
-        return 'A „Saját reptér” módhoz többrepteres pályát válassz (London, New York, Washington vagy Tokió).';
-    }
     return null;
 }
 
 function startGame(room) {
-    const opts = { aspect: room.aspect, players: room.players.size };
+    // ahány fő a létszám, annyi reptér él (legfeljebb 3, és amennyi a pályán van)
+    const count = Math.min(room.settings.size, 3, AIRPORTS[room.settings.airport].airports.length);
+    const opts = { aspect: room.aspect, players: room.players.size, airportCount: count };
     if (room.settings.mode === 'airports') {
-        const count = Math.min(room.players.size, AIRPORTS[room.settings.airport].airports.length);
-        opts.airportCount = count;
         // mindenki más repteret kapjon: ütközés vagy túl nagy szám esetén sorban újraosztjuk
         const players = [...room.players.values()];
         const seen = new Set();
@@ -352,8 +353,8 @@ function handle(ws, msg) {
     if (msg.t === 'join') {
         const room = rooms.get(String(msg.code || '').toUpperCase());
         if (!room) return send(ws, { t: 'error', text: 'Nincs ilyen szoba. Ellenőrizd a kódot.' });
-        const max = Rules.MODES[room.settings.mode].maxPlayers;
-        if (room.players.size >= max) return send(ws, { t: 'error', text: `A szoba megtelt (ebben a módban legfeljebb ${max} fő).` });
+        const max = Math.min(Rules.MODES[room.settings.mode].maxPlayers, room.settings.size);
+        if (room.players.size >= max) return send(ws, { t: 'error', text: `A szoba megtelt (${max} fős).` });
         if (ws.roomCode) removePlayer(ws);
         addPlayer(room, ws, msg.name);
         return;
@@ -402,8 +403,11 @@ function handle(ws, msg) {
                 const changed = room.settings.mode !== s.mode;
                 room.settings.mode = s.mode;
                 if (changed) reassignRoles(room);
-                // a „Saját reptér” módhoz többrepteres pálya kell
-                if (Rules.MODES[s.mode].needsCluster && !AIRPORTS[room.settings.airport].cluster && !room.sim) room.settings.airport = 'LONDON';
+                // a létszám nem lehet több, mint amit a mód enged
+                room.settings.size = Math.min(room.settings.size, Rules.MODES[s.mode].maxPlayers);
+            }
+            if (Number.isInteger(s.size) && !room.settings.solo && !room.sim) {
+                room.settings.size = Math.max(Math.max(1, room.players.size), Math.min(Rules.MODES[room.settings.mode].maxPlayers, s.size));
             }
             if (typeof s.sectorOffset === 'number') room.settings.sectorOffset = ((Math.round(s.sectorOffset) % 360) + 360) % 360;
             sendRoom(room);

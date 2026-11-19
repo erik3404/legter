@@ -280,10 +280,10 @@ test('jogosultságok: szerepek és szektorok', () => {
 
 // ---------- többrepteres pálya ----------
 test('többrepteres pálya: a repterek száma a játékosok számától függ, a gépek felváltva oszlanak el', () => {
-    const two = new Sim('LONDON', { rules: QUIET }, { airportCount: 2 });
+    const two = new Sim('EGLL', { rules: QUIET }, { airportCount: 2 });
     assert.strictEqual(two.airports.length, 2);
     assert.ok(two.runways.every((r) => r.airport < 2));
-    const three = new Sim('LONDON', { rules: QUIET }, { airportCount: 3 });
+    const three = new Sim('EGLL', { rules: QUIET }, { airportCount: 3 });
     assert.strictEqual(three.airports.length, 3);
     three.aircraft = [];
     const homes = [];
@@ -296,7 +296,7 @@ test('többrepteres pálya: a repterek száma a játékosok számától függ, a
 });
 
 test('többrepteres pálya: csak a saját reptér kifutójára lehet leszállni, és oda le is száll', () => {
-    const sim = new Sim('NEWYORK', { rules: QUIET }, { airportCount: 2 });
+    const sim = new Sim('KJFK', { rules: QUIET }, { airportCount: 2 });
     sim.timers.arrival = sim.timers.departure = sim.timers.transit = 1e9;
     sim.aircraft = [];
     const a = sim._spawnArrival();
@@ -711,4 +711,24 @@ test('megközelítés: a gép a kifutó tengelyén marad (Chicago és Budapest, 
             }
         }
     }
+});
+
+test('minden pályán 1–3 reptér él a létszámtól függően, és mind a légtérben van', () => {
+    for (const icao of Object.keys(AIRPORTS)) {
+        for (const n of [1, 2, 3]) {
+            const sim = new Sim(icao, { rules: QUIET }, { airportCount: n, aspect: 1.6, players: n });
+            assert.strictEqual(sim.airports.length, n, `${icao} ${n}`);
+            assert.ok(sim.runways.every((r) => r.airport < n));
+            for (const a of sim.airports) {
+                assert.ok(Math.abs(a.pos[0]) < sim.airspace.hw - 4 && Math.abs(a.pos[1]) < sim.airspace.hh - 4, `${icao} ${a.icao} a légtéren belül`);
+            }
+        }
+    }
+});
+
+test('Saját reptér mód: gazdátlan reptér gépeit bárki irányíthatja', () => {
+    const players = [{ id: 1, airport: 0 }, { id: 2, airport: 1 }];
+    const ac = { k: 'arr', st: 'airborne', ap: 2 };
+    assert.ok(Rules.canControl(ac, players[0], { mode: 'airports' }, players));
+    assert.ok(Rules.canControl(ac, players[1], { mode: 'airports' }, players));
 });

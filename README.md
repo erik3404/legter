@@ -40,9 +40,22 @@ Bármilyen más Node-tárhelyen is fut: a `PORT` környezeti változón figyel, 
 
 A szobagazda a lobbiban választ módot:
 
-- **Saját reptér (2–3 fő)**: többrepteres pálya (London: Heathrow, Gatwick, London City · New York: JFK, Newark ·
-  Washington: Dulles, Reagan National · Tokió: Haneda, Narita). Ahányan vagytok (legfeljebb 3), annyi reptér él,
-  és mindenki csak a saját repterének gépeit irányítja.
+A szobagazda a lobbiban beállítja a **létszámot** (1–3 fő; szabad és szektoros módban akár 6): **ahány fő, annyi reptér él
+a pályán (legfeljebb 3)**, minden játékmódban. Minden pálya kap két közeli társrepteret:
+
+| Pálya | Társrepterek |
+| --- | --- |
+| Budapest – Liszt Ferenc | Tököl, Budaörs |
+| Bécs – Schwechat | Pozsony, Malacky |
+| London – Heathrow | Gatwick, London City |
+| Frankfurt am Main | Wiesbaden, Egelsbach |
+| Prága – Václav Havel | Vodochody, Kbely |
+| San Francisco | Oakland, San José |
+| New York – JFK | LaGuardia, Newark |
+| Chicago – O'Hare | Midway, DuPage |
+| Atlanta – Hartsfield-Jackson | Peachtree, Fulton County |
+
+- **Saját reptér (2–3 fő)**: mindenki csak a saját repterének gépeit irányítja.
 - **Bevezető – Torony – Kivezető (2–3 fő)**: mint a valódi légiirányításban. A bevezető hozza be az érkezőket,
   a torony kezeli a reptér körüli zónát (felszállás, végső megközelítés, leszállás), a kivezető viszi ki az
   indulókat és az átrepülőket. A gép magától kerül át a következő irányítóhoz. Két főnél: Bevezető + Torony és Kivezető.
@@ -119,5 +132,5 @@ A játék kódja saját, MIT licenc alatt áll (lásd `LICENSE`).
 
 - **Reptéradatok** (kifutók koordinátái, fixpontok, terepmagasság): az [openScope](https://github.com/openscope/openscope)
   projektből, MIT licenc, © openScope contributors. Lásd `THIRD_PARTY_NOTICES.md`.
-- **Budapest (LHBP)** kifutói és a környékbeli rádióadók: [OurAirports](https://ourairports.com/data/), közkincs.
+- **Budapest (LHBP)**, a **társrepterek** kifutói és a környékbeli rádióadók: [OurAirports](https://ourairports.com/data/), közkincs.
 - **Háttértérkép** (szárazföld, vizek, folyók, utak, települések): [Natural Earth](https://www.naturalearthdata.com/), közkincs.

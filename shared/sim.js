@@ -116,16 +116,40 @@ class Sim {
     constructor(airportIcao = 'LOWW', shift = {}, opts = {}) {
         const ap = AIRPORTS[airportIcao] || AIRPORTS.LOWW;
         this.airport = ap;
+        // Multiban ahány reptér él (opts.airportCount, legfeljebb 3), a pálya annyi repterét használja.
+        // Több reptérnél a koordináták origója az aktív repterek közös középpontja lesz.
+        const allAirports = ap.airports || [{ icao: ap.icao, name: ap.name, pos: [0, 0] }];
+        const count = clamp(Math.round(opts.airportCount || 1), 1, allAirports.length);
+        const active = allAirports.slice(0, count);
+        this.offset = count > 1
+            ? [active.reduce((t, a) => t + a.pos[0], 0) / count, active.reduce((t, a) => t + a.pos[1], 0) / count].map((v) => Math.round(v * 100) / 100)
+            : [0, 0];
+        const sub = (p) => [Math.round((p[0] - this.offset[0]) * 1000) / 1000, Math.round((p[1] - this.offset[1]) * 1000) / 1000];
+        this.airports = active.map((a) => ({ icao: a.icao, name: a.name, pos: sub(a.pos) }));
+        this.fixes = (ap.fixes || []).map((f) => ({ name: f.name, pos: sub(f.pos) }));
+        const runwayData = ap.runways.filter((r) => (r.airport || 0) < count).map((r) => ({ ...r, ends: r.ends.map(sub) }));
+
         // A légtér a képernyő arányához igazodik (opts.aspect = szélesség / magasság),
-        // multiban játékosonként +15% terület (legfeljebb +30%).
-        const base = ap.airspace || AIRSPACE;
+        // multiban játékosonként +15% terület (legfeljebb +30%), és minden aktív reptér kényelmesen belefér.
+        const base = AIRSPACE;
         const grow = 1 + 0.15 * clamp((opts.players || 1) - 1, 0, 2);
-        const hw = Math.round(base.hw * Math.sqrt(grow) * 10) / 10;
         const aspect = Number(opts.aspect);
-        const hh = Number.isFinite(aspect) && aspect > 0
-            ? Math.round(clamp(hw / clamp(aspect, 0.55, 2.6), base.hh * 0.7, hw * 1.4) * 10) / 10
-            : Math.round(base.hh * Math.sqrt(grow) * 10) / 10;
-        this.airspace = { hw, hh };
+        let hw = base.hw * Math.sqrt(grow);
+        let hh = base.hh * Math.sqrt(grow);
+        if (count > 1) {
+            const pts = runwayData.flatMap((r) => r.ends);
+            hw = Math.max(hw, ...pts.map((p) => Math.abs(p[0]) + 8));
+            hh = Math.max(hh, ...pts.map((p) => Math.abs(p[1]) + 8));
+            if (Number.isFinite(aspect) && aspect > 0) {
+                const asp = clamp(aspect, 0.55, 2.6);
+                if (hw / hh < asp) hw = hh * asp; else hh = hw / asp;
+            }
+            hw = Math.min(hw, 48);
+            hh = Math.min(hh, 40);
+        } else if (Number.isFinite(aspect) && aspect > 0) {
+            hh = clamp(hw / clamp(aspect, 0.55, 2.6), base.hh * 0.7, hw * 1.4);
+        }
+        this.airspace = { hw: Math.round(hw * 10) / 10, hh: Math.round(hh * 10) / 10 };
         // nagyobb légtérben arányosan több üzemanyag, hogy a leghosszabb út is beleférjen
         this.fuelScale = Math.max(1, (this.airspace.hw + this.airspace.hh) / (AIRSPACE.hw + AIRSPACE.hh));
         this.shift = Rules.normalizeShift(shift);
@@ -165,12 +189,9 @@ class Sim {
             vip: rand(540, 780),
             constraint: rand(240, 360)
         };
-        const allAirports = ap.airports || [{ icao: ap.icao, name: ap.name, pos: [0, 0] }];
-        const count = clamp(Math.round(opts.airportCount || allAirports.length), 1, allAirports.length);
-        this.airports = allAirports.slice(0, count);
         this.nextHome = 0;
         this.gates = this._buildGates();
-        this.runways = ap.runways.filter((r) => (r.airport || 0) < count).map((r, i) => ({
+        this.runways = runwayData.map((r, i) => ({
             index: i,
             airport: r.airport || 0,
             names: r.names,
@@ -231,7 +252,7 @@ class Sim {
         const gates = bearings.map((brg, i) => {
             const pos = this._edge(brg);
             let best = null;
-            for (const f of this.airport.fixes) {
+            for (const f of this.fixes) {
                 if (used.has(f.name)) continue;
                 const diff = Math.abs(angleDiff(brg, bearing([0, 0], f.pos)));
                 if (diff < 22 && (!best || diff < best.diff)) best = { name: f.name, diff };
@@ -697,6 +718,7 @@ class Sim {
         a.targetSpd = a.cruise;
         a.alt = 0;
         a.takeoffEnd = this.threshold(rw, 1 - rw.activeEnd);
+        a.takeoffStart = thr.slice();
         return [true, `${a.callsign} felszállhat, ${this.runwayName(rw)}.`];
     }
 
@@ -1251,11 +1273,16 @@ class Sim {
 
         if (a.state === 'takeoff') {
             a.spd = Math.min(a.cruise, a.spd + 6 * TIME_SCALE * dt);
-            if (a.spd > 140) a.alt = Math.min(a.targetAlt, a.alt + CLIMB_RATE * dt);
+            // a kifutó mentén megtett út (a küszöbtől) és a kifutó hossza
+            const rw = this.runways[a.runway];
+            const len = dist(a.takeoffStart || a.takeoffEnd, a.takeoffEnd);
+            const rolled = dist(a.takeoffStart || [a.x, a.y], [a.x, a.y]);
+            // elemelkedés 140 csomónál, rövid kifutón legkésőbb a kifutó 60%-ánál
+            if (a.spd > 140 || rolled > len * 0.6) a.alt = Math.min(a.targetAlt, a.alt + CLIMB_RATE * dt);
             this._move(a, dt);
-            if (a.alt > 0 && !a.climbOutUntil && dist([a.x, a.y], a.takeoffEnd) < 0.2 + a.spd * KT_TO_NMPS * dt) {
+            if (!a.climbOutUntil && rolled >= len - 0.05) {
                 // egyenes emelkedés a kifutó vége után még 1 nm-ig
-                a.climbOutUntil = fromBearing(a.takeoffEnd, a.hdg, 1);
+                a.climbOutUntil = fromBearing(a.takeoffEnd, rw ? this.landingHeading(rw) : a.hdg, 1);
             }
             if (a.climbOutUntil && dist([a.x, a.y], a.climbOutUntil) < 0.3) {
                 a.state = 'airborne';
@@ -1449,8 +1476,11 @@ class Sim {
             a.appRunway = rw.index;
             a.appPhase = null;
         }
+        // a ráfordulás közben túl közel ért a kifutóhoz: vissza a belépési pontra
+        if (a.appPhase === 'intercept' && along < FAF_DISTANCE - 1.5) a.appPhase = 'entry';
         if (!a.appPhase) {
-            const goodSide = along > FAF_DISTANCE + 1 && Math.abs(cross) < 6;
+            // azonnal csak akkor fordul rá, ha a 30°-os ráforduláshoz van elég hely a megközelítési pont előtt
+            const goodSide = along > FAF_DISTANCE + 1 + Math.abs(cross) * 1.8 && Math.abs(cross) < 6;
             const towardRunway = Math.abs(angleDiff(a.hdg, bearing([a.x, a.y], this.threshold(rw)))) < 100;
             a.appPhase = goodSide && towardRunway ? 'intercept' : 'entry';
         }
@@ -1699,6 +1729,8 @@ class Sim {
             gates: this.gates,
             runways: this.runways.map((r) => ({ index: r.index, airport: r.airport, names: r.names, ends: r.ends })),
             airports: this.airports,
+            mapOffset: this.offset,
+            otherAirports: (this.airport.airports || []).length,
             classes: CLASSES,
             shift: this.shift,
             multiplier: this.multiplier

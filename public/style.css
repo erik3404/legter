@@ -431,3 +431,6 @@ table.keys td:first-child { white-space: nowrap; }
 #chat-pop[hidden], #reconnect[hidden], .quick-msgs[hidden] { display: none; }
 .player.offline { opacity: .5; }
 .log-line.chat, #log-last.chat { color: var(--text); }
+
+.ap-multi { color: var(--accent); font-size: 11px; margin-top: 4px; }
+#size-field[hidden] { display: none; }

@@ -20,14 +20,24 @@ const PICK = {
 };
 const NM = 1852;
 
-// Többrepteres pályák a „Saját reptér” multi módhoz: ahányan játszotok (legfeljebb 3), annyi reptér él.
-const CLUSTERS = {
-    LONDON: { name: 'London – 3 reptér', members: { egll: 'Heathrow', egkk: 'Gatwick', eglc: 'London City' } },
-    NEWYORK: { name: 'New York – 2 reptér', members: { kjfk: 'JFK', kewr: 'Newark' } },
-    WASHINGTON: { name: 'Washington – 2 reptér', members: { kiad: 'Dulles', kdca: 'Reagan National' } },
-    TOKYO: { name: 'Tokió – 2 reptér', members: { rjtt: 'Haneda', rjaa: 'Narita' } }
+// Multiban minden pálya kap két közeli társrepteret: ahányan vagytok (legfeljebb 3), annyi reptér él.
+// A társrepterek kifutói az OurAirports nyílt adataiból jönnek.
+const SATELLITES = {
+    LHBP: { LHTL: 'Tököl', LHBS: 'Budaörs' },
+    LOWW: { LZIB: 'Pozsony', LZMC: 'Malacky' },
+    EGLL: { EGKK: 'Gatwick', EGLC: 'London City' },
+    EDDF: { ETOU: 'Wiesbaden', EDFE: 'Egelsbach' },
+    LKPR: { LKVO: 'Vodochody', LKKB: 'Kbely' },
+    KSFO: { KOAK: 'Oakland', KSJC: 'San José' },
+    KJFK: { KLGA: 'LaGuardia', KEWR: 'Newark' },
+    KORD: { KMDW: 'Midway', KDPA: 'DuPage' },
+    KATL: { KPDK: 'Peachtree', KFTY: 'Fulton County' }
 };
-const CLUSTER_AIRSPACE = { hw: 32, hh: 20 };
+// rövid nevek a reptércímkékhez
+const SHORT = {
+    LHBP: 'Ferihegy', LOWW: 'Schwechat', EGLL: 'Heathrow', EDDF: 'Frankfurt', LKPR: 'Ruzyně',
+    KSFO: 'San Francisco', KJFK: 'JFK', KORD: "O'Hare", KATL: 'Hartsfield-Jackson'
+};
 
 function parseCoord(s) {
     if (typeof s === 'number') return s;
@@ -152,28 +162,45 @@ if (OA_DIR) {
     }
 }
 
-for (const [key, cl] of Object.entries(CLUSTERS)) {
-    const members = Object.entries(cl.members).map(([icao, label]) => ({ icao, label, d: load(icao) }));
-    const lat0 = members.reduce((s2, m) => s2 + center(m.d)[0], 0) / members.length;
-    const lon0 = members.reduce((s2, m) => s2 + center(m.d)[1], 0) / members.length;
-    const runways = [];
-    members.forEach((m, i) => runways.push(...runwaysOf(m.d, lat0, lon0, i)));
-    out[key] = {
-        icao: key,
-        name: cl.name,
-        lat: lat0,
-        lon: lon0,
-        elevation: 0,
-        cluster: true,
-        airspace: CLUSTER_AIRSPACE,
-        runways,
-        fixes: fixesOf(members.map((m) => m.d), lat0, lon0, 18, 70),
-        airports: members.map((m) => {
-            const [la, lo] = center(m.d);
-            return { icao: m.icao.toUpperCase(), name: m.label, pos: project(lat0, lon0, la, lo) };
-        })
-    };
+// ---------- társrepterek ----------
+if (OA_DIR) {
+    const readCsv = (f) => parseCsv(fs.readFileSync(path.join(OA_DIR, `${f}.csv`), 'utf8'));
+    const airportsCsv = readCsv('airports');
+    const runwaysCsv = readCsv('runways');
+    for (const [main, sats] of Object.entries(SATELLITES)) {
+        const m = out[main];
+        if (!m) continue;
+        m.airports[0].name = SHORT[main] || m.name;
+        Object.entries(sats).forEach(([icao, label], i) => {
+            const ap = airportsCsv.find((a) => a.ident === icao);
+            const rws = runwaysCsv.filter((r) => r.airport_ident === icao && r.closed !== '1' && r.le_latitude_deg && r.he_latitude_deg);
+            if (!ap || !rws.length) throw new Error(`Hiányzó társreptér-adat: ${icao}`);
+            const pos = project(m.lat, m.lon, Number(ap.latitude_deg), Number(ap.longitude_deg));
+            m.airports.push({ icao, name: label, pos });
+            for (const r of rws) {
+                let ends = [
+                    project(m.lat, m.lon, Number(r.le_latitude_deg), Number(r.le_longitude_deg)),
+                    project(m.lat, m.lon, Number(r.he_latitude_deg), Number(r.he_longitude_deg))
+                ];
+                // Néhány rekordban a két végpont azonos (adathiba): ilyenkor a kifutót a hosszából
+                // és irányából rakjuk össze a megadott pont köré.
+                const lenNm = Number(r.length_ft) / 6076.12;
+                const got = Math.hypot(ends[1][0] - ends[0][0], ends[1][1] - ends[0][1]);
+                if (lenNm > 0 && got < lenNm * 0.5) {
+                    const hdg = Number(r.le_heading_degT) || (parseInt(r.le_ident, 10) * 10);
+                    const c = [(ends[0][0] + ends[1][0]) / 2, (ends[0][1] + ends[1][1]) / 2];
+                    const dx = Math.sin(hdg * Math.PI / 180) * lenNm / 2;
+                    const dy = Math.cos(hdg * Math.PI / 180) * lenNm / 2;
+                    const rnd = (v) => Math.round(v * 1000) / 1000;
+                    ends = [[rnd(c[0] - dx), rnd(c[1] - dy)], [rnd(c[0] + dx), rnd(c[1] + dy)]];
+                    console.log(`  javítva: ${icao} ${r.le_ident}/${r.he_ident} (${Math.round(lenNm * 1852)} m, ${hdg}°)`);
+                }
+                m.runways.push({ names: [r.le_ident, r.he_ident], ends, airport: i + 1 });
+            }
+        });
+    }
 }
+
 // Budapest legyen elöl a választóban
 const ordered = Object.fromEntries([...Object.keys(OA_PICK).filter((k) => out[k]), ...Object.keys(out).filter((k) => !OA_PICK[k])].map((k) => [k, out[k]]));
 fs.writeFileSync(path.join(__dirname, '..', 'shared', 'airports.json'), JSON.stringify(ordered));

@@ -25,5 +25,5 @@ Map layers in `shared/maps/*.json` are derived from Natural Earth (https://www.n
 
 ## OurAirports
 
-Runway and navaid data for LHBP (Budapest) in `shared/airports.json` are derived from OurAirports
+Runway and navaid data for LHBP (Budapest) and the satellite airports in `shared/airports.json` are derived from OurAirports
 (https://ourairports.com/data/), released into the public domain.

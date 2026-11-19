@@ -178,7 +178,7 @@ function polylines(features, proj, lat0, lon0, propsFn) {
 
 fs.mkdirSync(OUT_DIR, { recursive: true });
 for (const ap of Object.values(AIRPORTS)) {
-    BOX = ap.cluster ? 54 : 40;
+    BOX = 64;   // multiban a légtér a társrepterek felé is kiterjed
     const proj = projector(ap.lat, ap.lon);
     const map = {
         source: 'Natural Earth (public domain); terep: openScope (MIT)',
