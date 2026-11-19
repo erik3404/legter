@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="hu">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Légtér – többjátékos légiirányítás</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+    <header id="topbar">
+        <div class="brand"><span class="brand-mark">◎</span> LÉGTÉR</div>
+        <div class="tb-block">
+            <div class="tb-label">Reptér</div>
+            <div class="tb-value" id="tb-airport">–</div>
+        </div>
+        <div class="tb-block">
+            <div class="tb-label">Szoba</div>
+            <div class="tb-value mono" id="tb-room">–</div>
+        </div>
+        <div class="tb-block">
+            <div class="tb-label">Műszak</div>
+            <div class="tb-value mono" id="tb-clock">00:00</div>
+        </div>
+        <div class="tb-stats">
+            <span class="stat arr-c" title="Leszállt"><b id="st-landed">0</b> leszállt</span>
+            <span class="stat dep-c" title="Felszállt és kilépett"><b id="st-departed">0</b> felszállt</span>
+            <span class="stat tr-c" title="Átrepült"><b id="st-transited">0</b> átrepült</span>
+            <span class="stat bad-c" title="Incidensek"><b id="st-incidents">0</b> incidens</span>
+        </div>
+        <div class="tb-spacer"></div>
+        <div class="tb-controls">
+            <div class="seg" id="speed-seg">
+                <button data-speed="0.5">0.5×</button>
+                <button data-speed="1">1×</button>
+                <button data-speed="1.5">1.5×</button>
+                <button data-speed="2">2×</button>
+            </div>
+            <button id="btn-pause" class="btn">Szünet</button>
+            <button id="btn-end" class="btn ghost">Műszak vége</button>
+            <button id="btn-help" class="btn ghost" title="Irányítás (?)">?</button>
+        </div>
+    </header>
+
+    <main id="main">
+        <div id="scope-wrap">
+            <canvas id="scope"></canvas>
+            <div id="wind" class="mono"></div>
+            <div class="map-credit">Térkép: Natural Earth · reptéradatok: openScope</div>
+        </div>
+        <aside id="sidebar">
+            <section id="sel-card" class="panel">
+                <div class="empty-sel">
+                    <div class="kicker">Te vagy az irányító</div>
+                    <h2>Válassz ki egy gépet.</h2>
+                    <p>Kattints egy gépre a térképen vagy a listában. Utána kattints a térképre útpontért,
+                        nyomd meg a kifutó számát (1–9) a leszálláshoz, vagy az <kbd>X</kbd>-et a felszálláshoz.</p>
+                </div>
+            </section>
+            <section class="panel list-panel">
+                <div class="panel-head"><span>Induló gépek</span><span class="count mono" id="dep-count">0</span></div>
+                <div id="dep-list" class="ac-list"></div>
+            </section>
+            <section class="panel list-panel">
+                <div class="panel-head"><span>Légtérben</span><span class="count mono" id="air-count">0</span></div>
+                <div id="air-list" class="ac-list"></div>
+            </section>
+            <section class="panel" id="players-panel">
+                <div class="panel-head"><span>Irányítók</span><span class="count" id="mode-label"></span></div>
+                <div id="players-list"></div>
+            </section>
+        </aside>
+    </main>
+
+    <footer id="logbar">
+        <span class="log-tag">TWR</span>
+        <span id="log-last">Üdv a Légtérben!</span>
+        <button id="log-toggle" class="link">Korábbiak ▾</button>
+        <div id="log-history" hidden></div>
+    </footer>
+</div>
+
+<!-- Lobby -->
+<div id="lobby" class="overlay">
+    <div class="dialog">
+        <div class="kicker">Többjátékos légiirányítás</div>
+        <h1><span class="brand-mark">◎</span> Légtér</h1>
+        <div id="lobby-start">
+            <label class="field">Neved
+                <input id="in-name" maxlength="16" placeholder="pl. Erik">
+            </label>
+            <div class="grid2">
+                <label class="field">Reptér
+                    <select id="in-airport"></select>
+                </label>
+                <label class="field">Forgalom
+                    <select id="in-traffic">
+                        <option value="light">Nyugodt</option>
+                        <option value="normal" selected>Normál</option>
+                        <option value="busy">Csúcsidő</option>
+                    </select>
+                </label>
+            </div>
+            <label class="field">Multi mód
+                <select id="in-mode"></select>
+            </label>
+            <p class="hint" id="mode-desc"></p>
+            <div class="row">
+                <button id="btn-solo" class="btn primary">Egyedül játszom</button>
+                <button id="btn-create" class="btn">Szoba létrehozása</button>
+            </div>
+            <div class="divider"><span>vagy csatlakozz</span></div>
+            <div class="row">
+                <input id="in-code" class="mono code-input" maxlength="4" placeholder="KÓD">
+                <button id="btn-join" class="btn">Csatlakozás</button>
+            </div>
+            <p class="error" id="lobby-error"></p>
+        </div>
+
+        <div id="lobby-room" hidden>
+            <div class="room-code-box">
+                <div>
+                    <div class="tb-label">Szobakód</div>
+                    <div class="room-code mono" id="room-code">----</div>
+                </div>
+                <button id="btn-copy" class="btn ghost">Link másolása</button>
+            </div>
+            <div class="grid2" id="host-settings">
+                <label class="field">Reptér
+                    <select id="rs-airport"></select>
+                </label>
+                <label class="field">Forgalom
+                    <select id="rs-traffic">
+                        <option value="light">Nyugodt</option>
+                        <option value="normal">Normál</option>
+                        <option value="busy">Csúcsidő</option>
+                    </select>
+                </label>
+                <label class="field">Multi mód
+                    <select id="rs-mode"></select>
+                </label>
+                <label class="field" id="rs-offset-field">Szektorhatár elforgatása
+                    <input id="rs-offset" type="range" min="0" max="359" step="15" value="0">
+                </label>
+            </div>
+            <p class="hint" id="rs-mode-desc"></p>
+            <div id="room-players"></div>
+            <div class="row">
+                <button id="btn-start" class="btn primary">Műszak indítása</button>
+                <button id="btn-leave" class="btn ghost">Kilépés</button>
+            </div>
+            <p class="hint" id="wait-host" hidden>A szobagazda indítja a műszakot…</p>
+        </div>
+    </div>
+</div>
+
+<!-- Súgó -->
+<div id="help" class="overlay" hidden>
+    <div class="dialog wide">
+        <button class="close" id="help-close">×</button>
+        <div class="kicker">Irányítás</div>
+        <h2>Gyorsbillentyűk és egér</h2>
+        <div class="help-grid">
+            <div>
+                <h3>Billentyűzet</h3>
+                <table class="keys">
+                    <tr><td><kbd>Szóköz</kbd></td><td>Szünet / folytatás (szobagazda)</td></tr>
+                    <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>Kifutó kiválasztása (érkezőnél: leszállás, indulónál: felszálló kifutó)</td></tr>
+                    <tr><td><kbd>X</kbd></td><td>Felszállás</td></tr>
+                    <tr><td><kbd>R</kbd></td><td>Várakozó körözés be/ki</td></tr>
+                    <tr><td><kbd>G</kbd></td><td>Átstartolás végső megközelítésen</td></tr>
+                    <tr><td><kbd>Tab</kbd> / <kbd>Shift</kbd>+<kbd>Tab</kbd></td><td>Következő / előző induló</td></tr>
+                    <tr><td><kbd>N</kbd> / <kbd>Shift</kbd>+<kbd>N</kbd></td><td>Legújabb / régebbi gép a légtérben</td></tr>
+                    <tr><td><kbd>W</kbd> / <kbd>S</kbd></td><td>Sebesség ±10 csomó (<kbd>Shift</kbd>: max / min)</td></tr>
+                    <tr><td><kbd>C</kbd> / <kbd>D</kbd> vagy <kbd>↑</kbd> / <kbd>↓</kbd></td><td>Emelkedés / süllyedés 1000 lábbal (<kbd>Shift</kbd>: max / min)</td></tr>
+                    <tr><td><kbd>H</kbd></td><td>Felső sáv elrejtése</td></tr>
+                    <tr><td><kbd>Esc</kbd></td><td>Kijelölés megszüntetése</td></tr>
+                </table>
+            </div>
+            <div>
+                <h3>Egér</h3>
+                <ul>
+                    <li>Kattintás egy gépre: kijelölés. Egymást fedő gépeknél újabb kattintás a következőt választja.</li>
+                    <li>Kattintás üres helyre: útpont. A gép oda szúrja be, ahol a legkisebb kerülőt jelenti.</li>
+                    <li>Kattintás egy útpontra: törlés. Húzással áthelyezhető.</li>
+                    <li>A szaggatott útvonal-szakasz húzása új útpontot szúr be.</li>
+                    <li><kbd>Shift</kbd>+kattintás: az útvonal cseréje egyetlen új pontra.</li>
+                    <li><kbd>Alt</kbd>+kattintás: útpont lerakása egy gépen keresztül is.</li>
+                    <li><kbd>Shift</kbd>+kattintás a kifutó számára: üzemi irány megfordítása (ha szabad).</li>
+                    <li>Görgő: nagyítás, jobb gombos húzás: mozgatás.</li>
+                </ul>
+                <h3>Színek</h3>
+                <p><span class="arr-c">■ Érkező</span> &nbsp; <span class="dep-c">■ Induló</span> &nbsp; <span class="tr-c">■ Átrepülő</span> &nbsp; <span class="bad-c">◯ Konfliktus</span></p>
+                <h3>Cél</h3>
+                <p>Az érkezőket juttasd le egy kifutóra, az indulókat és átrepülőket a kijelölt kapun (A–F) küldd ki.
+                    Tarts legalább 3 nm vagy 1000 láb távolságot. Figyeld az üzemanyagot és a földi várakozási időt.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Műszak vége -->
+<div id="summary" class="overlay" hidden>
+    <div class="dialog">
+        <div class="kicker">Műszak vége</div>
+        <h2 id="sum-title">Összesítés</h2>
+        <div id="sum-body"></div>
+        <div class="row">
+            <button id="btn-again" class="btn primary">Új műszak</button>
+            <button id="btn-sum-close" class="btn ghost">Bezárás</button>
+        </div>
+    </div>
+</div>
+
+<div id="disconnected" class="overlay" hidden>
+    <div class="dialog">
+        <h2>Megszakadt a kapcsolat</h2>
+        <p>A szerver nem érhető el.</p>
+        <button class="btn primary" onclick="location.reload()">Újratöltés</button>
+    </div>
+</div>
+
+<script src="/shared/rules.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,17 @@
+{
+  "name": "legter",
+  "version": "0.1.0",
+  "description": "Légtér – többjátékos, böngészős légiirányító játék",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test test/*.test.js",
+    "build:airports": "node tools/extract-airports.js ../openscope/assets/airports"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT",
+  "dependencies": {
+    "express": "^4.21.2",
+    "ws": "^8.18.0"
+  }
+}
