@@ -12,6 +12,7 @@
         text: '#c9d4e3', muted: '#6f7f96', accent: '#4fd1c5'
     };
     const AIRPORT_DESC = {
+        LHBP: 'Ferihegy: két párhuzamos kifutó Budapest délkeleti szélén, a Duna és a város közelében.',
         LOWW: 'Két egymást keresztező kifutó a Duna mellett, Bécs keleti szélén.',
         EGLL: 'Két hosszú párhuzamos kifutó, nyugat felől sűrű forgalommal.',
         EDDF: 'Három párhuzamos kifutó és egy csak felszállásra használt északi–déli pálya.',
@@ -41,18 +42,68 @@
         view: { zoom: 1, panX: 0, panY: 0 },
         logs: [],
         firstAirspaceSeen: new Map(),
-        draft: null          // a lobbiban szerkesztett műszak-beállítás (gazda)
+        draft: null,         // a lobbiban szerkesztett műszak-beállítás (gazda)
+        pings: [],           // térképjelölések
+        flash: null,         // gyorsüzenethez kötött gép kiemelése
+        mouse: null          // utolsó egérpozíció (P billentyű)
     };
     let soloPending = false;
 
     // ---------- hálózat ----------
+    // ---------- kapcsolat és visszacsatlakozás ----------
+    const SESSION_KEY = 'legter-session';
+    let leaving = false;
+    let retry = { attempt: 0, timer: null, since: 0 };
+
+    function loadSession() {
+        try {
+            const s = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
+            return s && Date.now() - s.at < 30 * 60 * 1000 ? s : null;
+        } catch (e) {
+            return null;
+        }
+    }
+    function saveSession(code, token) {
+        try { localStorage.setItem(SESSION_KEY, JSON.stringify({ code, token, at: Date.now() })); } catch (e) { /* nem baj */ }
+    }
+    function clearSession() {
+        try { localStorage.removeItem(SESSION_KEY); } catch (e) { /* nem baj */ }
+    }
+
     function connect() {
         const url = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`;
         const ws = new WebSocket(url);
         state.ws = ws;
         ws.onmessage = (e) => onMessage(JSON.parse(e.data));
-        ws.onclose = () => { $('disconnected').hidden = false; };
-        return new Promise((resolve) => { ws.onopen = resolve; });
+        ws.onclose = () => {
+            if (state.ws !== ws || leaving) return;
+            scheduleReconnect();
+        };
+        return new Promise((resolve) => {
+            ws.onopen = () => {
+                retry = { attempt: 0, timer: null, since: 0 };
+                $('reconnect').hidden = true;
+                resolve();
+            };
+        });
+    }
+
+    // megszakadt kapcsolatnál egyre ritkábban próbálkozunk, legfeljebb 2 percig
+    function scheduleReconnect() {
+        if (!retry.since) retry.since = Date.now();
+        if (Date.now() - retry.since > 120000) {
+            $('reconnect').hidden = true;
+            $('disconnected').hidden = false;
+            return;
+        }
+        $('reconnect').hidden = false;
+        const delay = Math.min(8000, 1000 * Math.pow(1.6, retry.attempt++));
+        clearTimeout(retry.timer);
+        retry.timer = setTimeout(async () => {
+            await connect();
+            const sess = loadSession();
+            if (sess) send({ t: 'resume', code: sess.code, token: sess.token });
+        }, delay);
     }
 
     function send(msg) {
@@ -68,6 +119,8 @@
             case 'joined':
                 state.me = m.you;
                 state.room = m.room;
+                if (m.token) saveSession(m.room.code, m.token);
+                if (m.resumed) addLog('good', 'Visszacsatlakoztál a szobához.');
                 if (m.room && m.room.code) {
                     try { history.replaceState(null, '', `?room=${m.room.code}`); } catch (e) { /* nem baj */ }
                 }
@@ -107,6 +160,7 @@
                 checkReview();
                 renderPerks();
                 checkOwnership();
+                renderQuick();
                 break;
             case 'log':
                 addLog(m.kind, m.text, null, m.by, m.color);
@@ -119,6 +173,20 @@
                 break;
             case 'queued':
                 $('queued').textContent = m.count ? `${m.count} parancs vár a folytatásra` : '';
+                break;
+            case 'resumeFailed':
+                clearSession();
+                state.room = null;
+                state.info = null;
+                $('lobby-error').textContent = m.text;
+                renderLobby();
+                break;
+            case 'ping':
+                state.pings.push({ x: m.x, y: m.y, color: m.color, by: m.by, at: performance.now() });
+                if (m.pid !== state.me) Sound.play('ping');
+                break;
+            case 'chat':
+                showChat(m);
                 break;
             case 'error':
                 $('lobby-error').textContent = m.text;
@@ -285,6 +353,48 @@
         const next = s.nextReview ? `<span class="hint">Következő értékelés: ${s.nextReview.moves} gép vagy ${fmtTime(s.nextReview.seconds)}</span>` : '';
         const html = `${chips}${next}`;
         if ($('perks-list').innerHTML !== html) $('perks-list').innerHTML = html;
+    }
+
+    const QUICK = ['Vedd át!', 'Tartsd vissza az indulókat!', 'Segítség kell!', 'Figyelj, időjárás jön!', 'Rendben!', 'Köszi!'];
+    function renderQuick() {
+        const r = state.room;
+        const show = r && r.started && r.players.length > 1;
+        $('quick-msgs').hidden = !show;
+        if (show && !$('quick-msgs').dataset.ready) {
+            $('quick-msgs').dataset.ready = '1';
+            $('quick-msgs').innerHTML = '<div class="tb-label">Gyorsüzenet (a kijelölt géphez kötve)</div><div class="quick-grid">'
+                + QUICK.map((q, i) => `<button class="btn quick-btn" data-q="${i}">${esc(q)}</button>`).join('') + '</div>';
+        }
+    }
+
+    let chatTimer = null;
+    function showChat(m) {
+        addLog('chat', m.text, null, m.by, m.color);
+        const pop = $('chat-pop');
+        pop.innerHTML = `<b style="color:${m.color}">${esc(m.by)}:</b> ${esc(m.text)}`;
+        pop.style.borderColor = m.color;
+        pop.hidden = false;
+        pop.onclick = () => {
+            if (m.id != null && state.acById.has(m.id)) select(m.id);
+            pop.hidden = true;
+        };
+        if (m.id != null) state.flash = { id: m.id, color: m.color, until: performance.now() + 5000 };
+        if (m.pid !== state.me) Sound.play('chat');
+        clearTimeout(chatTimer);
+        chatTimer = setTimeout(() => { pop.hidden = true; }, 5000);
+    }
+
+    // „I”: az eddigi eredmény a műszak befejezése nélkül
+    function showStatsSoFar() {
+        if (!state.snap) return;
+        const s = state.snap.stats;
+        $('sum-title').textContent = `Eddig: ${fmtTime(state.snap.t)} · ${s.score} pont`;
+        $('sum-body').innerHTML = `<p class="hint">A műszak tovább megy – ez csak egy pillantás az eddigi eredményre.</p><div class="sum-stats">
+            <div><b class="arr-c">${s.landed}</b>leszállt</div><div><b class="dep-c">${s.departed}</b>felszállt</div>
+            <div><b class="tr-c">${s.transited}</b>átrepült</div><div><b class="bad-c">${s.incidents}</b>incidens</div></div>
+            <p class="hint">Alappont: ${s.base} · szorzó: ×${(state.info.multiplier || 1).toFixed(2)}</p>`;
+        $('btn-sum-close').textContent = 'Vissza a játékhoz';
+        $('summary').hidden = false;
     }
 
     function showHandoffRequest(m) {
@@ -549,7 +659,7 @@
         if (!state.room) return;
         $('mode-label').textContent = Rules.MODES[state.room.settings.mode].label;
         $('players-list').innerHTML = state.room.players.map((p) => `
-            <div class="player"><span class="dot" style="background:${p.color}"></span>${esc(p.name)}
+            <div class="player ${p.online === false ? 'offline' : ''}"><span class="dot" style="background:${p.color}"></span>${esc(p.name)}${p.online === false ? ' <span class="me">(nincs kapcsolat)</span>' : ''}
             ${p.id === state.me ? '<span class="me">(te)</span>' : ''}${p.id === state.room.hostId ? '<span class="me">★</span>' : ''}
             <span class="role">${playerRoleText(p)}</span></div>`).join('');
     }
@@ -693,7 +803,12 @@
         };
         $('in-code').onkeydown = (e) => { if (e.key === 'Enter') $('btn-join').click(); };
         $('btn-start').onclick = () => send({ t: 'start', aspect: radarAspect() });
-        $('btn-leave').onclick = () => { location.href = location.pathname; };
+        $('btn-leave').onclick = () => {
+            leaving = true;
+            send({ t: 'leave' });
+            clearSession();
+            setTimeout(() => { location.href = location.pathname; }, 150);
+        };
         $('btn-copy').onclick = async () => {
             const link = `${location.origin}${location.pathname}?room=${state.room.code}`;
             try {
@@ -751,6 +866,7 @@
 
     function showSummary(m) {
         const s = m.stats;
+        $('btn-sum-close').textContent = 'Vissza a beállításokhoz';
         $('sum-title').textContent = m.gameOver ? `Vége a műszaknak · ${s.score} pont` : `${fmtTime(m.time)} műszak · ${s.score} pont`;
         $('sum-body').innerHTML = `${m.gameOver ? `<div class="storm-banner">⛈ ${esc(m.gameOver.reason)} (${fmtTime(m.time)} után)</div>` : ''}<div class="sum-stats">
             <div><b class="arr-c">${s.landed}</b>leszállt</div><div><b class="dep-c">${s.departed}</b>felszállt</div>
@@ -840,6 +956,20 @@
         }
     }
     const posOf = (a) => state.disp.get(a.id) || { x: a.x, y: a.y, h: a.h };
+
+    // a felszálló gép a kifutón végigmegy, a vége után 1 nm-t egyenesen emelkedik, csak utána fordul
+    function departurePrefix(a) {
+        if (a.k !== 'dep' || !(a.st === 'ground' || a.st === 'takeoff') || a.rw == null || !state.info) return null;
+        const rw = state.info.runways[a.rw];
+        const end = rwState(a.rw).e;
+        const thr = rw.ends[end];
+        const far = rw.ends[1 - end];
+        const len = Math.hypot(far[0] - thr[0], far[1] - thr[1]) || 1;
+        const climb = [far[0] + (far[0] - thr[0]) / len, far[1] + (far[1] - thr[1]) / len];
+        if (a.st === 'ground') return [thr, far, climb];
+        const p = posOf(a);
+        return [[p.x, p.y], far, climb];
+    }
 
     function routeFor(a) {
         if (state.localRoute && state.localRoute.id === a.id) return state.localRoute.route;
@@ -1404,7 +1534,8 @@
 
     function drawRoute(a, color, faded) {
         const p = posOf(a);
-        const pts = [[p.x, p.y], ...routeFor(a), ...routeEnd(a)];
+        const prefix = departurePrefix(a);
+        const pts = [...(prefix || [[p.x, p.y]]), ...routeFor(a), ...routeEnd(a)];
         const scr = pts.map((q) => toScreen(...q));
         ctx.strokeStyle = color;
         ctx.globalAlpha = faded ? 0.3 : 0.85;
@@ -1442,6 +1573,19 @@
         const alt = rules().altitude;
         const airborne = state.snap.aircraft.filter((a) => a.st !== 'ground');
         if (showAll) for (const a of airborne) if (a.id !== state.selected) drawRoute(a, acColor(a), true);
+        // a kijelölt, még földön álló induló tervezett útja: kifutó → egyenes emelkedés → útpontok → kapu
+        const selGround = state.selected != null ? state.acById.get(state.selected) : null;
+        if (selGround && selGround.st === 'ground' && selGround.k === 'dep') {
+            drawRoute(selGround, acColor(selGround), false);
+            const rw = state.info.runways[selGround.rw];
+            if (rw) {
+                const [tx, ty] = toScreen(...rw.ends[rwState(selGround.rw).e]);
+                ctx.fillStyle = acColor(selGround);
+                ctx.font = '600 11px ui-monospace, monospace';
+                ctx.textAlign = 'center';
+                ctx.fillText(`${selGround.cs} · ${runwayLabel(selGround.rw)}`, tx, ty - 26);
+            }
+        }
         for (const a of airborne) {
             const p = posOf(a);
             const [sx, sy] = toScreen(p.x, p.y);
@@ -1633,6 +1777,45 @@
         }
     }
 
+    function drawPings(now) {
+        state.pings = state.pings.filter((p) => now - p.at < 3500);
+        for (const p of state.pings) {
+            const [x, y] = toScreen(p.x, p.y);
+            const age = (now - p.at) / 3500;
+            for (let i = 0; i < 3; i++) {
+                const t = ((now - p.at) / 900 + i / 3) % 1;
+                ctx.strokeStyle = p.color;
+                ctx.globalAlpha = (1 - t) * (1 - age * 0.6);
+                ctx.lineWidth = 2.5;
+                ctx.beginPath();
+                ctx.arc(x, y, 6 + t * 34, 0, Math.PI * 2);
+                ctx.stroke();
+            }
+            ctx.globalAlpha = 1 - age * 0.5;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(x, y, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.font = '600 12px system-ui, sans-serif';
+            ctx.textAlign = 'center';
+            ctx.fillText(p.by, x, y - 44);
+            ctx.globalAlpha = 1;
+        }
+        // gyorsüzenethez kötött gép kiemelése
+        if (state.flash && now < state.flash.until && state.acById.has(state.flash.id)) {
+            const p = posOf(state.acById.get(state.flash.id));
+            const [x, y] = toScreen(p.x, p.y);
+            const pulse = 0.5 + 0.5 * Math.sin(now / 120);
+            ctx.strokeStyle = state.flash.color;
+            ctx.lineWidth = 3;
+            ctx.globalAlpha = 0.5 + pulse * 0.5;
+            ctx.beginPath();
+            ctx.arc(x, y, 26 + pulse * 6, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.globalAlpha = 1;
+        }
+    }
+
     function frame(now) {
         updateDisplay(now);
         if (state.info) clampView();
@@ -1649,6 +1832,7 @@
             drawGates();
             drawIncoming(now);
             drawAircraft(now);
+            drawPings(now);
         }
         if (state.room && state.room.paused) {
             ctx.fillStyle = 'rgba(245,196,81,0.9)';
@@ -1685,7 +1869,9 @@
 
     function segmentAt(a, sx, sy) {
         const p = posOf(a);
-        const pts = [[p.x, p.y], ...routeFor(a), ...routeEnd(a).slice(0, 1)].map((q) => toScreen(...q));
+        const prefix = departurePrefix(a);
+        const start = prefix ? prefix[prefix.length - 1] : [p.x, p.y];
+        const pts = [start, ...routeFor(a), ...routeEnd(a).slice(0, 1)].map((q) => toScreen(...q));
         for (let i = 0; i < pts.length - 1; i++) {
             const [ax, ay] = pts[i];
             const [bx, by] = pts[i + 1];
@@ -1751,10 +1937,7 @@
             addLog('warn', `${sel.cs} ködben van, amíg ki nem ér, nem irányítható.`);
             return;
         }
-        if (sel.st === 'ground' || sel.st === 'takeoff' || sel.st === 'rollout') {
-            if (sel.st === 'ground') addLog('warn', `${sel.cs} még a földön van – előbb szállj fel vele (X).`);
-            return;
-        }
+        if (sel.st === 'rollout' || (sel.st === 'ground' && sel.k !== 'dep')) return;
         const as = airspace();
         if (Math.abs(x) > as.hw + 0.5 || Math.abs(y) > as.hh + 0.5) return;
         if (mods.shiftKey) {
@@ -1785,7 +1968,7 @@
         }
         if (pointers.size > 2 || pinchLock) return;
         if (e.button === 2 || e.button === 1) {
-            state.drag = { type: 'pan', sx, sy, panX: state.view.panX, panY: state.view.panY };
+            state.drag = { type: 'pan', sx, sy, panX: state.view.panX, panY: state.view.panY, right: e.button === 2 };
             return;
         }
         if (!state.snap) return;
@@ -1832,7 +2015,15 @@
 
         // érintésnél csak felengedéskor döntjük el, hogy koppintás (útpont) vagy húzás (térkép mozgatása)
         if (touchMode) {
-            state.drag = { type: 'tap', sx, sy };
+            const drag = { type: 'tap', sx, sy };
+            state.drag = drag;
+            // hosszú érintés (fél másodperc mozdulatlanul): jelölés a térképen
+            setTimeout(() => {
+                if (state.drag === drag && drag.type === 'tap') {
+                    drag.pinged = true;
+                    sendPing(sx, sy);
+                }
+            }, 550);
             return;
         }
         emptyClick(sx, sy, e);
@@ -1840,6 +2031,7 @@
 
     canvas.addEventListener('pointermove', (e) => {
         const [sx, sy] = canvasPos(e);
+        state.mouse = [sx, sy];
         if (!pointers.has(e.pointerId)) {
             if (e.pointerType === 'mouse') updateCursor(sx, sy);
             return;
@@ -1858,7 +2050,7 @@
         let d = state.drag;
         if (!d) return;
         if (d.type === 'tap') {
-            if (Math.hypot(sx - d.sx, sy - d.sy) < 10) return;
+            if (d.pinged || Math.hypot(sx - d.sx, sy - d.sy) < 10) return;
             d = { type: 'pan', sx: d.sx, sy: d.sy, panX: state.view.panX, panY: state.view.panY };
             state.drag = d;
         }
@@ -1898,6 +2090,13 @@
         if (pointers.size === 0) pinchLock = false;
         const d = state.drag;
         state.drag = null;
+        if (d && d.type === 'pan' && d.right && e.type !== 'pointercancel') {
+            // jobb klikk húzás nélkül: jelölés a térképen
+            const [ux, uy] = canvasPos(e);
+            if (Math.hypot(ux - d.sx, uy - d.sy) < 6) sendPing(ux, uy);
+            return;
+        }
+        if (d && d.pinged) return;
         if (!d || d.type === 'pan' || e.type === 'pointercancel') return;
         const [sx, sy] = canvasPos(e);
         if (d.type === 'tap') {
@@ -1928,6 +2127,12 @@
         state.view.panX += after[0] - before[0];
         state.view.panY += after[1] - before[1];
     }, { passive: false });
+
+    function sendPing(sx, sy) {
+        if (!state.room || !state.info) return;
+        const [x, y] = toWorld(sx, sy);
+        send({ t: 'ping', x: Math.round(x * 100) / 100, y: Math.round(y * 100) / 100 });
+    }
 
     function updateCursor(sx, sy) {
         const sel = state.selected != null ? state.acById.get(state.selected) : null;
@@ -1969,6 +2174,11 @@
             return;
         }
         if (key === 'n') { cycleList('air', e.shiftKey); return; }
+        if (key === 'i') {
+            if ($('summary').hidden) showStatsSoFar(); else $('summary').hidden = true;
+            return;
+        }
+        if (key === 'p' && state.mouse) { sendPing(...state.mouse); return; }
         if (key === 'h') { $('app').classList.toggle('hide-top'); setTimeout(resize, 0); return; }
         if (key === 'escape') { select(null); $('help').hidden = true; return; }
         if (key === '?') { $('help').hidden = !$('help').hidden; return; }
@@ -2053,6 +2263,10 @@
         };
         $('btn-help').onclick = () => { $('help').hidden = false; };
         $('btn-fit').onclick = () => { state.view = { zoom: 1, panX: 0, panY: 0 }; };
+        $('quick-msgs').onclick = (e) => {
+            const b = e.target.closest('[data-q]');
+            if (b) send({ t: 'quick', i: Number(b.dataset.q), id: state.selected != null ? state.selected : undefined });
+        };
         $('review-cards').onclick = (e) => {
             const b = e.target.closest('[data-perk]');
             if (b) cmd('choosePerk', { perk: b.dataset.perk });
@@ -2078,6 +2292,10 @@
         bindSidebar();
         requestAnimationFrame(frame);
         await Promise.all([loadAirports(), connect()]);
+        // oldalfrissítés után automatikusan visszalépünk a korábbi szobába
+        const sess = loadSession();
+        const urlRoom = new URLSearchParams(location.search).get('room');
+        if (sess && (!urlRoom || urlRoom.toUpperCase() === sess.code)) send({ t: 'resume', code: sess.code, token: sess.token });
         renderLobby();
         window.__legterDebug = state;
     }

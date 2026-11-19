@@ -582,3 +582,88 @@ test('a légtér a képernyő arányához igazodik, multiban nagyobb', () => {
         assert.ok(Math.abs(Math.abs(g.pos[0]) - as.hw) < 0.05 || Math.abs(Math.abs(g.pos[1]) - as.hh) < 0.05);
     }
 });
+
+test('körözés: útpont, útpont-húzás vagy kifutó után abbahagyja', () => {
+    const sim = makeSim('LOWW');
+    sim.aircraft = [];
+    const a = sim._spawnArrival();
+    for (const [cmd, extra] of [['addWaypoint', { x: 3, y: 3 }], ['runway', { runway: 0 }], ['replaceRoute', { x: 2, y: 2 }]]) {
+        sim.command({ type: 'hold', id: a.id });
+        assert.ok(a.hold);
+        assert.ok(sim.command(Object.assign({ type: cmd, id: a.id }, extra))[0], cmd);
+        assert.ok(!a.hold, `${cmd} után nem köröz`);
+    }
+    a.route = [[1, 1]];
+    sim.command({ type: 'hold', id: a.id });
+    sim.command({ type: 'moveWaypoint', id: a.id, index: 0, x: 4, y: 4 });
+    assert.ok(!a.hold, 'húzás után nem köröz');
+});
+
+test('felszálló: számgombbal kifutó, felszállás előtt útpont, a kifutó vége után fordul', () => {
+    const sim = makeSim('EDDF');
+    const d = sim.aircraft.find((a) => a.state === 'ground');
+    sim.aircraft = [d];
+    const other = sim.runways.find((r) => r.airport === d.home && r.index !== d.runway);
+    assert.ok(sim.command({ type: 'runway', id: d.id, runway: other.index })[0]);
+    assert.strictEqual(d.runway, other.index);
+    const gate = sim.gates.find((g) => g.letter === d.exitGate);
+    assert.ok(sim.command({ type: 'addWaypoint', id: d.id, x: gate.pos[0] / 2, y: gate.pos[1] / 2 })[0], 'földön is adható útpont');
+    sim.command({ type: 'takeoff', id: d.id });
+    const rw = sim.runways[d.runway];
+    const hdg = sim.landingHeading(rw);
+    const far = sim.threshold(rw, 1 - rw.activeEnd);
+    // amíg a kifutó vége után 1 nm-t meg nem tett, nem fordul el
+    for (let i = 0; i < 3000 && d.state === 'takeoff'; i++) {
+        sim.step(0.1);
+        assert.ok(Math.abs(((d.hdg - hdg + 540) % 360) - 180) < 1, 'felszállás közben egyenesen');
+    }
+    const along = Math.hypot(d.x - far[0], d.y - far[1]);
+    assert.ok(along > 0.6, 'a kifutó vége után fordul');
+    run(sim, 900);
+    assert.strictEqual(sim.stats.departed, 1, JSON.stringify(sim.incidentLog));
+});
+
+test('konfliktusjelzés: párhuzamosan vagy távolodva nem sípol, egymás felé vagy keresztező úttal igen', () => {
+    const setup = (ra, rb, pa, pb) => {
+        const sim = makeSim('LOWW');
+        sim.aircraft = [];
+        const a = sim._spawnTransit();
+        const b = sim._spawnTransit();
+        Object.assign(a, pa, { route: ra, spd: 220 });
+        Object.assign(b, pb, { route: rb, spd: 220 });
+        sim._checkSeparation();
+        return a.conflict;
+    };
+    // párhuzamosan, 2 nm-re egymás mellett, ugyanarra
+    assert.strictEqual(setup([[0, 10]], [[2, 10]], { x: 0, y: 0, hdg: 0 }, { x: 2, y: 0, hdg: 0 }), false, 'párhuzamos');
+    // 2,5 nm-re, egymástól el
+    assert.strictEqual(setup([[-10, 0]], [[10, 0]], { x: -1.2, y: 0, hdg: 270 }, { x: 1.2, y: 0, hdg: 90 }), false, 'távolodnak');
+    // egymás felé
+    assert.strictEqual(setup([[10, 0]], [[-10, 0]], { x: -1.2, y: 0, hdg: 90 }, { x: 1.2, y: 0, hdg: 270 }), true, 'egymás felé');
+    // most távolodnak, de az útjuk keresztezi egymást
+    assert.strictEqual(setup([[-3, 0], [3, 5]], [[3, 0], [-3, 5]], { x: -1.2, y: 0, hdg: 270 }, { x: 1.2, y: 0, hdg: 90 }), true, 'keresztező út');
+    // nagyon közel: mindig jelez
+    assert.strictEqual(setup([[0, 10]], [[1, 10]], { x: 0, y: 0, hdg: 0 }, { x: 1, y: 0, hdg: 0 }), true, 'nagyon közel');
+});
+
+test('leszállási sáv: párhuzamos végső megközelítésen nincs sípolás és incidens', () => {
+    const sim = makeSim('LHBP');
+    sim.aircraft = [];
+    const a = sim._spawnArrival();
+    const b = sim._spawnArrival() || sim._spawnArrival();
+    // a két párhuzamos kifutóra, egyszerre végső megközelítésen
+    const [r0, r1] = sim.runways;
+    for (const [ac, rw] of [[a, r0], [b, r1]]) {
+        const thr = sim.threshold(rw);
+        const back = (sim.landingHeading(rw) + 180) % 360;
+        const p = [thr[0] + Math.sin(back * Math.PI / 180) * 5, thr[1] + Math.cos(back * Math.PI / 180) * 5];
+        Object.assign(ac, { x: p[0], y: p[1], hdg: sim.landingHeading(rw), alt: 1500, state: 'final', runway: rw.index, route: [] });
+    }
+    let warned = false;
+    for (let i = 0; i < 400 && sim.aircraft.length; i++) {
+        sim.step(0.1);
+        if (a.conflict || b.conflict) warned = true;
+    }
+    assert.ok(!warned, 'nem sípol');
+    assert.strictEqual(sim.stats.incidents, 0, JSON.stringify(sim.incidentLog));
+});

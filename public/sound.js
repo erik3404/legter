@@ -129,6 +129,16 @@
         review() {
             [784, 988, 1175, 1568].forEach((f, i) => tone({ freq: f, type: 'sine', start: i * 0.09, dur: 0.3, gain: 0.3 }));
         },
+        // jelölés a térképen: rövid, „szonáros” pittyenés
+        ping() {
+            tone({ freq: 1320, type: 'sine', dur: 0.06, gain: 0.35 });
+            tone({ freq: 1760, type: 'sine', start: 0.08, dur: 0.12, gain: 0.25 });
+        },
+        // gyorsüzenet: rádió-szerű kattanás és rövid hang
+        chat() {
+            tone({ freq: 2400, type: 'square', dur: 0.025, gain: 0.12, filter: 4000 });
+            tone({ freq: 880, type: 'triangle', start: 0.05, dur: 0.16, gain: 0.35 });
+        },
         // figyelmeztetés (zivatar, kifutózárás): lefelé lépő kettős hang
         warn() {
             tone({ freq: 523, type: 'triangle', dur: 0.16, gain: 0.4 });

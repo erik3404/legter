@@ -1,9 +1,13 @@
 // Builds shared/airports.json from openScope airport files (MIT, (c) openScope contributors).
-// Usage: node tools/extract-airports.js <openscope/assets/airports> 
+// Usage: node tools/extract-airports.js <openscope/assets/airports> [ourairports-csv-mappa]
+// Az openScope-ban nem szereplő repterek (pl. Budapest) az OurAirports nyílt adataiból jönnek (közkincs).
 const fs = require('fs');
 const path = require('path');
 
 const SRC = process.argv[2];
+const OA_DIR = process.argv[3];
+// OurAirports-ból felvett repterek: kód → megjelenített név
+const OA_PICK = { LHBP: 'Budapest – Liszt Ferenc' };
 const PICK = {
     loww: 'Bécs – Schwechat',
     egll: 'London – Heathrow',
@@ -90,6 +94,64 @@ for (const [icao, name] of Object.entries(PICK)) {
     };
 }
 
+// ---------- OurAirports (CSV) ----------
+function parseCsv(text) {
+    const rows = [];
+    let row = [];
+    let cur = '';
+    let q = false;
+    for (let i = 0; i < text.length; i++) {
+        const c = text[i];
+        if (q) {
+            if (c === '"' && text[i + 1] === '"') { cur += '"'; i++; } else if (c === '"') q = false; else cur += c;
+        } else if (c === '"') q = true;
+        else if (c === ',') { row.push(cur); cur = ''; } else if (c === '\n') { row.push(cur); rows.push(row); row = []; cur = ''; } else if (c !== '\r') cur += c;
+    }
+    if (cur || row.length) { row.push(cur); rows.push(row); }
+    const head = rows.shift();
+    return rows.map((r) => Object.fromEntries(head.map((h, i) => [h, r[i]])));
+}
+
+if (OA_DIR) {
+    const readCsv = (f) => parseCsv(fs.readFileSync(path.join(OA_DIR, `${f}.csv`), 'utf8'));
+    const airportsCsv = readCsv('airports');
+    const runwaysCsv = readCsv('runways');
+    const navaidsCsv = readCsv('navaids');
+    for (const [icao, name] of Object.entries(OA_PICK)) {
+        const ap = airportsCsv.find((a) => a.ident === icao);
+        const lat0 = Number(ap.latitude_deg);
+        const lon0 = Number(ap.longitude_deg);
+        const runways = runwaysCsv.filter((r) => r.airport_ident === icao && r.closed !== '1' && r.le_latitude_deg && r.he_latitude_deg)
+            .map((r) => ({
+                names: [r.le_ident, r.he_ident],
+                ends: [
+                    project(lat0, lon0, Number(r.le_latitude_deg), Number(r.le_longitude_deg)),
+                    project(lat0, lon0, Number(r.he_latitude_deg), Number(r.he_longitude_deg))
+                ],
+                airport: 0
+            }));
+        // kapunevek: a környék rádiónavigációs adói (VOR, NDB)
+        const fixes = [];
+        for (const n of navaidsCsv) {
+            if (!n.latitude_deg || !/^[A-Z]{3,5}$/.test(n.ident)) continue;
+            const p = project(lat0, lon0, Number(n.latitude_deg), Number(n.longitude_deg));
+            const d = Math.hypot(p[0], p[1]);
+            if (d > 14 && d < 70 && !fixes.some((f) => f.name === n.ident)) fixes.push({ name: n.ident, pos: p });
+        }
+        out[icao] = {
+            icao,
+            name,
+            lat: lat0,
+            lon: lon0,
+            elevation: Number(ap.elevation_ft) || 0,
+            runways,
+            fixes,
+            airports: [{ icao, name, pos: [0, 0] }],
+            source: 'OurAirports'
+        };
+    }
+}
+
 for (const [key, cl] of Object.entries(CLUSTERS)) {
     const members = Object.entries(cl.members).map(([icao, label]) => ({ icao, label, d: load(icao) }));
     const lat0 = members.reduce((s2, m) => s2 + center(m.d)[0], 0) / members.length;
@@ -112,5 +174,7 @@ for (const [key, cl] of Object.entries(CLUSTERS)) {
         })
     };
 }
-fs.writeFileSync(path.join(__dirname, '..', 'shared', 'airports.json'), JSON.stringify(out));
-for (const a of Object.values(out)) console.log(a.icao, a.airports.map((x) => `${x.icao}@${x.pos.map((v) => v.toFixed(1))}`).join(' '), 'kifutók:', a.runways.length, 'fixek:', a.fixes.length);
+// Budapest legyen elöl a választóban
+const ordered = Object.fromEntries([...Object.keys(OA_PICK).filter((k) => out[k]), ...Object.keys(out).filter((k) => !OA_PICK[k])].map((k) => [k, out[k]]));
+fs.writeFileSync(path.join(__dirname, '..', 'shared', 'airports.json'), JSON.stringify(ordered));
+for (const a of Object.values(ordered)) console.log(a.icao, a.airports.map((x) => `${x.icao}@${x.pos.map((v) => v.toFixed(1))}`).join(' '), 'kifutók:', a.runways.length, 'fixek:', a.fixes.length);

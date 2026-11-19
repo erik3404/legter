@@ -6,7 +6,8 @@
   "scripts": {
     "start": "node server/index.js",
     "test": "node --test test/*.test.js",
-    "build:airports": "node tools/extract-airports.js ../openscope/assets/airports"
+    "build:airports": "node tools/extract-airports.js ../openscope/assets/airports ../ourairports-data",
+    "build:maps": "node tools/build-maps.js ../natural-earth/geojson ../openscope/assets/airports/terrain"
   },
   "engines": {
     "node": ">=18"

@@ -22,3 +22,8 @@ THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLI
 ## Natural Earth
 
 Map layers in `shared/maps/*.json` are derived from Natural Earth (https://www.naturalearthdata.com/), which is in the public domain.
+
+## OurAirports
+
+Runway and navaid data for LHBP (Budapest) in `shared/airports.json` are derived from OurAirports
+(https://ourairports.com/data/), released into the public domain.

@@ -52,6 +52,8 @@
             <canvas id="scope"></canvas>
             <div id="wind" class="mono"></div>
             <div id="toast" hidden></div>
+            <div id="chat-pop" hidden></div>
+            <div id="reconnect" hidden>Megszakadt a kapcsolat – újracsatlakozás…</div>
             <button id="btn-fit" title="Teljes légtér mutatása">⌖</button>
             <div class="map-credit">Térkép: Natural Earth · reptéradatok: openScope</div>
         </div>
@@ -76,6 +78,7 @@
                 <div class="panel-head"><span>Irányítók</span><span class="count" id="mode-label"></span></div>
                 <div id="players-list"></div>
                 <div id="perks-list" class="perks-list"></div>
+                <div id="quick-msgs" class="quick-msgs" hidden></div>
             </section>
         </aside>
     </main>
@@ -208,6 +211,8 @@
                     <tr><td><kbd>W</kbd> / <kbd>S</kbd></td><td>Sebesség ±10 csomó (<kbd>Shift</kbd>: max / min)</td></tr>
                     <tr><td><kbd>C</kbd> / <kbd>D</kbd> vagy <kbd>↑</kbd> / <kbd>↓</kbd></td><td>Emelkedés / süllyedés 1000 lábbal (<kbd>Shift</kbd>: max / min) – csak ha a Magasság szabály be van kapcsolva</td></tr>
                     <tr><td><kbd>H</kbd></td><td>Felső sáv elrejtése</td></tr>
+                    <tr><td><kbd>I</kbd></td><td>Eddigi eredmény a műszak befejezése nélkül</td></tr>
+                    <tr><td><kbd>P</kbd></td><td>Jelölés a térképen az egér helyén (a társaid is látják)</td></tr>
                     <tr><td><kbd>Esc</kbd></td><td>Kijelölés megszüntetése</td></tr>
                 </table>
             </div>
@@ -222,6 +227,8 @@
                     <li><kbd>Alt</kbd>+kattintás: útpont lerakása egy gépen keresztül is.</li>
                     <li><kbd>Shift</kbd>+kattintás a kifutó számára: üzemi irány megfordítása (ha szabad).</li>
                     <li>Görgő: nagyítás, jobb gombos húzás: mozgatás.</li>
+                    <li>Jobb klikk (húzás nélkül) vagy hosszú érintés: jelölés a térképen, ami a társaidnál is felvillan.</li>
+                    <li>Kijelölt indulónál a térképre kattintva már felszállás előtt megadhatod az útvonalát.</li>
                 </ul>
                 <h3>Színek</h3>
                 <p><span class="arr-c">■ Érkező</span> &nbsp; <span class="dep-c">■ Induló</span> &nbsp; <span class="tr-c">■ Átrepülő</span> &nbsp; <span class="em-c">■ Vészhelyzet / kényszerleszállás</span> &nbsp; <span style="color:#ff9f1c">■ Eltérített</span> &nbsp; <span style="color:#ffd84d">■ VIP</span> &nbsp; <span style="color:#7bd88f">▲ Vadászgép</span> &nbsp; <span class="bad-c">◯ Konfliktus</span></p>

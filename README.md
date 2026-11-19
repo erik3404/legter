@@ -51,6 +51,15 @@ A szobagazda a lobbiban választ módot:
 - **Szabad**: mindenki minden gépet irányíthat (legfeljebb 6 fő).
 - **Szektoros**: a légteret szeletekre osztjuk, mindenki a saját szeletét kezeli (legfeljebb 6 fő).
 
+**Budapest (LHBP)** is választható: a két párhuzamos kifutó pontos adatai az OurAirports nyílt adatbázisából jönnek.
+
+**Együttműködés:** jobb klikk (húzás nélkül), hosszú érintés vagy a **P** billentyű jelölést tesz a térképre, ami a
+társaidnál is felvillan. A **gyorsüzenetek** („Vedd át!”, „Tartsd vissza az indulókat!” stb.) a kijelölt géphez kötve
+mennek, a gép a társaidnál is kiemelődik.
+
+**Visszacsatlakozás:** ha megszakad a net vagy frissíted az oldalt, a játék 90 másodpercig megtartja a helyed, és
+automatikusan visszalép ugyanabba a szobába, ugyanazzal a poszttal.
+
 A posztokat a lobbiban választjátok ki; ha egy poszt üres vagy ketten választották, a játék szól.
 Játék közben a kijelölt gépnél **„Átadom neki”** gombbal átadhatod egy társadnak, vagy **„Átvétel kérése”**
 gombbal elkérheted tőle; a másik fél elfogadja vagy elutasítja.
@@ -110,4 +119,5 @@ A játék kódja saját, MIT licenc alatt áll (lásd `LICENSE`).
 
 - **Reptéradatok** (kifutók koordinátái, fixpontok, terepmagasság): az [openScope](https://github.com/openscope/openscope)
   projektből, MIT licenc, © openScope contributors. Lásd `THIRD_PARTY_NOTICES.md`.
+- **Budapest (LHBP)** kifutói és a környékbeli rádióadók: [OurAirports](https://ourairports.com/data/), közkincs.
 - **Háttértérkép** (szárazföld, vizek, folyók, utak, települések): [Natural Earth](https://www.naturalearthdata.com/), közkincs.

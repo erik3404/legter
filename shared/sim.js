@@ -95,6 +95,14 @@ function clampToAirspace(x, y, as = AIRSPACE) {
     return [clamp(x, -as.hw, as.hw), clamp(y, -as.hh, as.hh)];
 }
 
+function segmentsIntersect(p1, p2, p3, p4) {
+    const d = (p2[0] - p1[0]) * (p4[1] - p3[1]) - (p2[1] - p1[1]) * (p4[0] - p3[0]);
+    if (Math.abs(d) < 1e-9) return false;
+    const t = ((p3[0] - p1[0]) * (p4[1] - p3[1]) - (p3[1] - p1[1]) * (p4[0] - p3[0])) / d;
+    const u = ((p3[0] - p1[0]) * (p2[1] - p1[1]) - (p3[1] - p1[1]) * (p2[0] - p1[0])) / d;
+    return t >= 0 && t <= 1 && u >= 0 && u <= 1;
+}
+
 function pointSegmentDistance(p, a, b) {
     const dx = b[0] - a[0];
     const dy = b[1] - a[1];
@@ -555,8 +563,22 @@ class Sim {
         return null;
     }
 
+    // honnan indul a tervezett útvonal: felszálló gépnél a kifutó vége utáni egyenes emelkedés pontjából
+    _routeStart(a) {
+        if (a.kind === 'dep' && (a.state === 'ground' || a.state === 'takeoff') && a.runway != null) {
+            const rw = this.runways[a.runway];
+            return fromBearing(this.threshold(rw, 1 - rw.activeEnd), this.landingHeading(rw), 1);
+        }
+        return [a.x, a.y];
+    }
+
+    _stopHolding(a) {
+        a.hold = false;
+        a.autoHold = false;
+    }
+
     _cmdAddWaypoint(a, { x, y, index }) {
-        if (!a || a.state === 'rollout' || a.state === 'ground') return [false, 'Ennek a gépnek most nem adható útpont.'];
+        if (!a || a.state === 'rollout' || (a.state === 'ground' && a.kind !== 'dep')) return [false, 'Ennek a gépnek most nem adható útpont.'];
         if (!Number.isFinite(x) || !Number.isFinite(y)) return [false, null];
         const p = this._clamp(x, y);
         if (a.state === 'final') a.state = 'airborne';
@@ -564,7 +586,7 @@ class Sim {
             a.route.splice(clamp(index, 0, a.route.length), 0, p);
         } else {
             // a legkisebb kerülőt okozó helyre szúrjuk be
-            const pts = [[a.x, a.y], ...a.route];
+            const pts = [this._routeStart(a), ...a.route];
             const end = this._routeEndpoint(a);
             if (end) pts.push(end);
             let bestIdx = a.route.length;
@@ -577,13 +599,15 @@ class Sim {
             a.route.splice(bestIdx, 0, p);
         }
         if (a.route.length > 12) a.route.length = 12;
-        a.hold = false;
+        // útpontot kapott: abbahagyja a körözést
+        this._stopHolding(a);
         return [true, null];
     }
 
     _cmdMoveWaypoint(a, { index, x, y }) {
         if (!a || !a.route[index] || !Number.isFinite(x) || !Number.isFinite(y)) return [false, null];
         a.route[index] = this._clamp(x, y);
+        this._stopHolding(a);
         return [true, null];
     }
 
@@ -594,9 +618,10 @@ class Sim {
     }
 
     _cmdReplaceRoute(a, { x, y }) {
-        if (!a || a.state === 'rollout' || a.state === 'ground' || !Number.isFinite(x) || !Number.isFinite(y)) return [false, null];
+        if (!a || a.state === 'rollout' || (a.state === 'ground' && a.kind !== 'dep') || !Number.isFinite(x) || !Number.isFinite(y)) return [false, null];
         if (a.state === 'final') a.state = 'airborne';
         a.route = [this._clamp(x, y)];
+        this._stopHolding(a);
         a.hold = false;
         return [true, null];
     }
@@ -618,6 +643,8 @@ class Sim {
         if (a.state === 'rollout') return [false, null];
         a.runway = runway;
         if (a.state === 'final') a.state = 'airborne';
+        // kifutót kapott: abbahagyja a körözést (kényszerleszállásnál újra beáll, ha kell)
+        this._stopHolding(a);
         // magasság nélküli játékban automatikusan süllyed a megközelítéshez
         if (!this.rules.altitude && a.targetAlt > ALT.approach) a.targetAlt = ALT.approach;
         return [true, `${a.callsign} leszállásra engedélyezve: ${this.runwayName(rw)}.`];
@@ -1423,6 +1450,63 @@ class Sim {
         }
     }
 
+    // a gép tervezett útja (legfeljebb ~10 nm): jelenlegi hely → útpontok → kapu / megközelítési pont
+    _plannedPath(a, maxLen = 10) {
+        const pts = [[a.x, a.y]];
+        if (a.state === 'final' && a.runway != null) {
+            pts.push(this.threshold(this.runways[a.runway]));
+        } else if (a.hold) {
+            return pts;
+        } else {
+            pts.push(...a.route);
+            const end = this._routeEndpoint(a);
+            if (end && !(a.kind !== 'arr' && this.rules.manualRouting && !a.route.length && !a.routedToGate)) pts.push(end);
+            if (pts.length === 1) pts.push(fromBearing([a.x, a.y], a.hdg, maxLen));
+        }
+        // levágás a megadott hosszra
+        const out = [pts[0]];
+        let len = 0;
+        for (let i = 1; i < pts.length && len < maxLen; i++) {
+            const seg = dist(pts[i - 1], pts[i]);
+            if (len + seg > maxLen) {
+                const t = (maxLen - len) / seg;
+                out.push([pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * t, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * t]);
+                break;
+            }
+            out.push(pts[i]);
+            len += seg;
+        }
+        return out;
+    }
+
+    // keresztezi-e egymást két gép tervezett útja
+    _pathsCross(a, b) {
+        const pa = this._plannedPath(a);
+        const pb = this._plannedPath(b);
+        for (let i = 0; i < pa.length - 1; i++) {
+            for (let j = 0; j < pb.length - 1; j++) {
+                if (segmentsIntersect(pa[i], pa[i + 1], pb[j], pb[j + 1])) return true;
+            }
+        }
+        return false;
+    }
+
+    // végső megközelítésen (bármilyen távolságban) vagy felszállás közben lévő gép
+    _runwayProtected(a) {
+        if (a.state === 'takeoff') return true;
+        if (a.state !== 'final' || a.runway == null) return false;
+        return true;
+    }
+
+    // közelednek-e egymáshoz (a relatív sebesség a másik felé mutat)
+    _closing(a, b) {
+        const va = [Math.sin(toRad(a.hdg)) * a.spd, Math.cos(toRad(a.hdg)) * a.spd];
+        const vb = [Math.sin(toRad(b.hdg)) * b.spd, Math.cos(toRad(b.hdg)) * b.spd];
+        const rx = b.x - a.x;
+        const ry = b.y - a.y;
+        return rx * (vb[0] - va[0]) + ry * (vb[1] - va[1]) < 0;
+    }
+
     _checkSeparation() {
         const air = this.aircraft.filter((a) => a.kind !== 'mil' && (a.state === 'airborne' || a.state === 'final' || (a.state === 'takeoff' && a.alt > 0)));
         for (const a of this.aircraft) a.conflict = false;
@@ -1437,11 +1521,14 @@ class Sim {
                 if (d >= SEPARATION.warnNm) continue;
                 const v = useAlt ? Math.abs(a.alt - b.alt) : 0;
                 if (v >= SEPARATION.warnFt) continue;
-                // két gép ugyanarra a kifutóra a végső megközelítésen 3 nm-nél közelebb is lehet egymás mögött
-                const sameFinal = a.state === 'final' && b.state === 'final' && a.runway === b.runway;
-                if (sameFinal && d > 1.0) continue;
-                a.conflict = true;
-                b.conflict = true;
+                // a leszállási és felszállási sávban (végső megközelítés, felszállás) a gépeket a pálya
+                // vezeti egymás mögött vagy párhuzamosan: ott nincs figyelmeztetés és incidens, csak ütközés
+                if (this._runwayProtected(a) && this._runwayProtected(b) && d > SEPARATION.crashNm) continue;
+                // figyelmeztetés csak valódi veszélynél: nagyon közel vannak, vagy közelednek / keresztezik egymás útját
+                if (d < SEPARATION.lossNm || this._closing(a, b) || this._pathsCross(a, b)) {
+                    a.conflict = true;
+                    b.conflict = true;
+                }
                 const key = `${Math.min(a.id, b.id)}-${Math.max(a.id, b.id)}`;
                 if (d < SEPARATION.crashNm && v < SEPARATION.crashFt) {
                     crashed.add(a);

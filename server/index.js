@@ -1,6 +1,7 @@
 'use strict';
 // Légtér – HTTP + WebSocket szerver. A szimuláció itt fut, a böngészők csak megjelenítenek és parancsot küldenek.
 const http = require('http');
+const crypto = require('crypto');
 const path = require('path');
 const express = require('express');
 const compression = require('compression');
@@ -13,6 +14,9 @@ const TICK_MS = 100;
 const BROADCAST_EVERY = 2; // tick-enként -> 5 Hz
 const PLAYER_COLORS = ['#4fd1c5', '#f6ad55', '#b794f4', '#68d391', '#f687b3', '#63b3ed'];
 const SPEEDS = [0.5, 1, 1.5, 2, 4];
+const RECONNECT_GRACE_MS = 90 * 1000;   // ennyi ideig várjuk vissza a kiesett játékost
+// gyorsüzenetek (a kliens a sorszámot küldi)
+const QUICK_MESSAGES = ['Vedd át!', 'Tartsd vissza az indulókat!', 'Segítség kell!', 'Figyelj, időjárás jön!', 'Rendben!', 'Köszi!'];
 const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 200;
 const MAX_MESSAGES_PER_SECOND = 40;
 
@@ -56,17 +60,18 @@ function makeCode() {
 }
 
 function send(ws, msg) {
-    if (ws.readyState === 1) ws.send(JSON.stringify(msg));
+    if (ws && ws.readyState === 1) ws.send(JSON.stringify(msg));
 }
 
 function broadcast(room, msg) {
     const data = JSON.stringify(msg);
-    for (const p of room.players.values()) if (p.ws.readyState === 1) p.ws.send(data);
+    for (const p of room.players.values()) if (p.ws && p.ws.readyState === 1) p.ws.send(data);
 }
 
 function publicPlayers(room) {
     return [...room.players.values()].map((p) => ({
-        id: p.id, name: p.name, color: p.color, role: p.role, sector: p.sector, airport: p.airport, selected: p.selected
+        id: p.id, name: p.name, color: p.color, role: p.role, sector: p.sector, airport: p.airport, selected: p.selected,
+        online: !!p.ws
     }));
 }
 
@@ -133,6 +138,7 @@ function cleanName(name) {
 function addPlayer(room, ws, name) {
     const player = {
         id: nextPlayerId++,
+        token: crypto.randomBytes(16).toString('hex'),   // ezzel lehet visszacsatlakozni
         ws,
         name: cleanName(name),
         color: freeColor(room),
@@ -147,26 +153,74 @@ function addPlayer(room, ws, name) {
     if (!room.hostId) room.hostId = player.id;
     ws.roomCode = room.code;
     ws.playerId = player.id;
-    send(ws, { t: 'joined', you: player.id, room: roomInfo(room) });
+    send(ws, { t: 'joined', you: player.id, token: player.token, room: roomInfo(room) });
     if (room.sim) send(ws, { t: 'static', info: room.sim.staticInfo() });
     sendRoom(room);
     if (room.players.size > 1) broadcast(room, { t: 'log', kind: 'info', text: `${player.name} csatlakozott.` });
     return player;
 }
 
-function removePlayer(ws) {
-    const room = rooms.get(ws.roomCode);
-    if (!room) return;
-    const player = room.players.get(ws.playerId);
-    room.players.delete(ws.playerId);
+// végleges kilépés (gomb, új szoba, vagy a visszacsatlakozási idő lejárt)
+function removePlayerById(room, playerId) {
+    const player = room.players.get(playerId);
+    if (!player) return;
+    clearTimeout(player.dropTimer);
+    room.players.delete(playerId);
+    if (player.ws) {
+        player.ws.roomCode = null;
+        player.ws.playerId = null;
+    }
     if (room.players.size === 0) {
         clearInterval(room.interval);
         rooms.delete(room.code);
         return;
     }
-    if (room.hostId === ws.playerId) room.hostId = room.players.keys().next().value;
+    if (room.hostId === playerId) {
+        // a gazda szerepét lehetőleg egy éppen kapcsolódó játékos veszi át
+        const next = [...room.players.values()].find((p) => p.ws) || room.players.values().next().value;
+        room.hostId = next.id;
+    }
     if (!room.sim) reassignRoles(room);
-    if (player) broadcast(room, { t: 'log', kind: 'info', text: `${player.name} kilépett.` });
+    broadcast(room, { t: 'log', kind: 'info', text: `${player.name} kilépett.` });
+    sendRoom(room);
+}
+
+function removePlayer(ws) {
+    const room = rooms.get(ws.roomCode);
+    if (room) removePlayerById(room, ws.playerId);
+}
+
+// megszakadt kapcsolat: a játékos helye 90 mp-ig megmarad, addig visszacsatlakozhat
+function onDisconnect(ws) {
+    const room = rooms.get(ws.roomCode);
+    if (!room) return;
+    const player = room.players.get(ws.playerId);
+    if (!player || player.ws !== ws) return;     // már új kapcsolattal visszajött
+    player.ws = null;
+    player.dropTimer = setTimeout(() => removePlayerById(room, player.id), RECONNECT_GRACE_MS);
+    broadcast(room, { t: 'log', kind: 'warn', text: `${player.name} kapcsolata megszakadt – várjuk vissza…` });
+    sendRoom(room);
+}
+
+function resumePlayer(ws, code, token) {
+    const room = rooms.get(String(code || '').toUpperCase());
+    const player = room && [...room.players.values()].find((p) => p.token === token);
+    if (!player) return send(ws, { t: 'resumeFailed', text: 'A korábbi szoba már nem létezik (például mert a szerver újraindult).' });
+    clearTimeout(player.dropTimer);
+    if (player.ws && player.ws !== ws) {
+        // ugyanaz a játékos új lapon/kapcsolattal: a régit lezárjuk
+        const old = player.ws;
+        old.roomCode = null;
+        old.playerId = null;
+        old.close();
+    }
+    if (ws.roomCode && (ws.roomCode !== room.code || ws.playerId !== player.id)) removePlayer(ws);
+    player.ws = ws;
+    ws.roomCode = room.code;
+    ws.playerId = player.id;
+    send(ws, { t: 'joined', you: player.id, token: player.token, room: roomInfo(room), resumed: true });
+    if (room.sim) send(ws, { t: 'static', info: room.sim.staticInfo() });
+    broadcast(room, { t: 'log', kind: 'good', text: `${player.name} visszacsatlakozott.` });
     sendRoom(room);
 }
 
@@ -291,6 +345,10 @@ function handle(ws, msg) {
         addPlayer(room, ws, msg.name);
         return;
     }
+    if (msg.t === 'resume') {
+        resumePlayer(ws, msg.code, String(msg.token || ''));
+        return;
+    }
     if (msg.t === 'join') {
         const room = rooms.get(String(msg.code || '').toUpperCase());
         if (!room) return send(ws, { t: 'error', text: 'Nincs ilyen szoba. Ellenőrizd a kódot.' });
@@ -308,6 +366,33 @@ function handle(ws, msg) {
     const isHost = room.hostId === player.id;
 
     switch (msg.t) {
+        case 'leave':
+            removePlayerById(room, player.id);
+            break;
+        // jelölés a térképen: felvillan a társaknál
+        case 'ping': {
+            const now = Date.now();
+            if (now - (player.lastPing || 0) < 700) return;
+            player.lastPing = now;
+            const x = Number(msg.x);
+            const y = Number(msg.y);
+            if (!Number.isFinite(x) || !Number.isFinite(y) || Math.abs(x) > 100 || Math.abs(y) > 100) return;
+            broadcast(room, { t: 'ping', x, y, by: player.name, color: player.color, pid: player.id });
+            break;
+        }
+        // gyorsüzenet: előre megírt szövegek, opcionálisan egy géphez kötve
+        case 'quick': {
+            const now = Date.now();
+            if (now - (player.lastQuick || 0) < 800) return;
+            player.lastQuick = now;
+            const text = QUICK_MESSAGES[msg.i];
+            if (!text) return;
+            const ac = room.sim && msg.id != null ? room.sim.find(msg.id) : null;
+            broadcast(room, {
+                t: 'chat', text: ac ? `${text} (${ac.callsign})` : text, by: player.name, color: player.color, pid: player.id, id: ac ? ac.id : null
+            });
+            break;
+        }
         case 'settings': {
             if (!isHost) return;
             const s = msg.settings || {};
@@ -468,7 +553,7 @@ wss.on('connection', (ws) => {
             console.error('Hiba az üzenet feldolgozásakor:', e);
         }
     });
-    ws.on('close', () => removePlayer(ws));
+    ws.on('close', () => onDisconnect(ws));
 });
 
 setInterval(() => {
