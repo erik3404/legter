@@ -12,17 +12,21 @@ const TICK_MS = 100;
 const BROADCAST_EVERY = 2; // tick-enként -> 5 Hz
 const PLAYER_COLORS = ['#4fd1c5', '#f6ad55', '#b794f4', '#68d391', '#f687b3', '#63b3ed'];
 const SPEEDS = [0.5, 1, 1.5, 2, 4];
+const MAX_ROOMS = Number(process.env.MAX_ROOMS) || 200;
+const MAX_MESSAGES_PER_SECOND = 40;
 
 const app = express();
-app.use(express.static(path.join(__dirname, '..', 'public')));
-app.use('/shared', express.static(path.join(__dirname, '..', 'shared')));
+app.disable('x-powered-by');
+const staticOptions = { maxAge: process.env.NODE_ENV === 'production' ? '1h' : 0 };
+app.use(express.static(path.join(__dirname, '..', 'public'), staticOptions));
+app.use('/shared', express.static(path.join(__dirname, '..', 'shared'), staticOptions));
 app.get('/api/airports', (req, res) => {
     res.json(Object.values(AIRPORTS).map((a) => ({ icao: a.icao, name: a.name, runways: a.runways.length })));
 });
 app.get('/healthz', (req, res) => res.send('ok'));
 
 const server = http.createServer(app);
-const wss = new WebSocketServer({ server, path: '/ws' });
+const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 16 * 1024 });
 
 const rooms = new Map();
 let nextPlayerId = 1;
@@ -166,6 +170,7 @@ function compactForRules(ac) {
 function handle(ws, msg) {
     if (!msg || typeof msg !== 'object') return;
     if (msg.t === 'create') {
+        if (rooms.size >= MAX_ROOMS) return send(ws, { t: 'error', text: 'A szerver most tele van, próbáld újra később.' });
         if (ws.roomCode) removePlayer(ws);
         const room = createRoom(msg.settings || {});
         addPlayer(room, ws, msg.name);
@@ -267,7 +272,13 @@ function handle(ws, msg) {
 wss.on('connection', (ws) => {
     ws.isAlive = true;
     ws.on('pong', () => { ws.isAlive = true; });
+    ws.msgWindow = { start: Date.now(), count: 0 };
     ws.on('message', (data) => {
+        // egyszerű elárasztás elleni védelem
+        const now = Date.now();
+        if (now - ws.msgWindow.start > 1000) ws.msgWindow = { start: now, count: 0 };
+        ws.msgWindow.count += 1;
+        if (ws.msgWindow.count > MAX_MESSAGES_PER_SECOND) return;
         let msg;
         try {
             msg = JSON.parse(data);
@@ -294,8 +305,18 @@ setInterval(() => {
     }
 }, 30000);
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
     console.log(`Légtér fut: http://localhost:${PORT}`);
 });
+
+function shutdown() {
+    console.log('Leállás…');
+    for (const ws of wss.clients) ws.close(1001, 'Szerver újraindul');
+    server.close(() => process.exit(0));
+    server.closeAllConnections();
+    setTimeout(() => process.exit(0), 3000).unref();
+}
+process.on('SIGTERM', shutdown);
+process.on('SIGINT', shutdown);
 
 module.exports = { server };

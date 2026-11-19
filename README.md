@@ -18,6 +18,24 @@ npm start
 Ezután nyisd meg a http://localhost:3000 címet. Ha többen játszotok, mindenkinek ugyanazt a szervert kell elérnie
 (helyi hálózaton a gép IP-címe, vagy egy tárhelyre telepítve, például Render vagy Railway).
 
+## Nyilvános szerverre telepítés (Render)
+
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/erik3404/legter)
+
+1. Lépj be a [render.com](https://render.com) oldalon a GitHub-fiókoddal.
+2. Kattints a fenti gombra, vagy válaszd a **New → Blueprint** menüpontot, és add meg ezt a repót.
+   A beállításokat a `render.yaml` tartalmazza (ingyenes csomag, Node 22, állapot-ellenőrzés a `/healthz` címen).
+3. Az **Apply** után néhány perc, és kapsz egy `https://legter-xxxx.onrender.com` címet. Ezt küldd el a barátaidnak.
+
+Minden `main` ágra feltöltött módosítás után a Render magától újratelepít.
+
+Az ingyenes csomag tudnivalói:
+
+- Ha egy ideig senki nem használja, a szerver elalszik, és az első megnyitás kb. fél–egy percig tölt.
+- Újraindításkor vagy elalváskor a futó szobák elvesznek (adatbázis nincs, minden a memóriában van).
+
+Bármilyen más Node-tárhelyen is fut: a `PORT` környezeti változón figyel, a WebSocket a `/ws` útvonalon van.
+
 ## Multi módok
 
 - **Szabad**: mindenki minden gépet irányíthat, a pontszám közös.

@@ -1,0 +1,14 @@
+# Render Blueprint: a Render felületén New → Blueprint → ez a repó.
+services:
+  - type: web
+    name: legter
+    runtime: node
+    plan: free
+    buildCommand: npm ci --omit=dev
+    startCommand: npm start
+    healthCheckPath: /healthz
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: NODE_VERSION
+        value: "22"
