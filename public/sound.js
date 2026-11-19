@@ -97,6 +97,13 @@
             tone({ freq: 950, freqEnd: 600, type: 'triangle', start: 0.35, dur: 0.35, gain: 0.45 });
             tone({ freq: 600, freqEnd: 950, type: 'triangle', start: 0.7, dur: 0.35, gain: 0.45 });
         },
+        // zivatarmag felé tart: sürgető, magas–mély váltakozó riasztás
+        stormWarn() {
+            for (let i = 0; i < 3; i++) {
+                tone({ freq: 1180, type: 'square', start: i * 0.22, dur: 0.1, gain: 0.25, filter: 3000 });
+                tone({ freq: 780, type: 'square', start: i * 0.22 + 0.11, dur: 0.1, gain: 0.25, filter: 3000 });
+            }
+        },
         // figyelmeztetés (zivatar, kifutózárás): lefelé lépő kettős hang
         warn() {
             tone({ freq: 523, type: 'triangle', dur: 0.16, gain: 0.4 });

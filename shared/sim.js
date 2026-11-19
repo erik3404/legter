@@ -17,8 +17,8 @@ const GLIDE_FT_PER_NM = 318;
 // az üzemanyag- és várakozási idők viszont valódi másodpercek.
 const TIME_SCALE = 2.5;
 const TURN_RATE = 3 * TIME_SCALE;            // fok/s
-const CLIMB_RATE = (2000 / 60) * TIME_SCALE; // láb/s
-const DESCENT_RATE = (2200 / 60) * TIME_SCALE;
+const CLIMB_RATE = (3000 / 60) * TIME_SCALE; // láb/s
+const DESCENT_RATE = (3000 / 60) * TIME_SCALE;
 const ACCEL = 2 * TIME_SCALE;                // csomó/s levegőben
 const KT_TO_NMPS = TIME_SCALE / 3600;
 
@@ -39,7 +39,8 @@ const ALT = {
     arrivalSpawn: [9000, 11000],
     approach: 3000,
     departureInitial: 5000,
-    exitLevels: [10000, 11000, 12000, 13000, 14000],
+    // az indulók kilépési szintje: a legközelebbi kapuig is el lehessen érni
+    exitLevels: [8000, 9000, 10000, 11000],
     transit: [12000, 16000],
     min: 2000,
     max: 20000
@@ -106,6 +107,8 @@ class Sim {
         this.time = 0;
         this.aircraft = [];
         this.storms = [];
+        this.fogs = [];
+        this.gameOver = null;
         this.events = [];
         this.stats = { landed: 0, departed: 0, transited: 0, incidents: 0, emergencies: 0, base: 0, score: 0 };
         this.incidentLog = [];
@@ -120,7 +123,8 @@ class Sim {
             arrival: gentle ? 20 : 3,
             departure: gentle ? 70 : 40,
             transit: gentle ? 90 : 45,
-            storm: rand(100, 160),
+            storm: rand(180, 300),
+            fog: rand(120, 240),
             emergency: rand(200, 300),
             constraint: rand(240, 360)
         };
@@ -268,7 +272,7 @@ class Sim {
 
     _gateClear(gate) {
         return !this.aircraft.some((a) => a.state === 'airborne' && dist([a.x, a.y], gate.pos) < 5)
-            && !this.storms.some((s) => dist([s.x, s.y], gate.pos) < s.r * 0.9);
+            && ![...this.storms, ...this.fogs].some((s) => dist([s.x, s.y], gate.pos) < s.r + 2);
     }
 
     _enterAt(a, gate) {
@@ -304,7 +308,8 @@ class Sim {
         a.hdg = this.rules.manualRouting ? norm360(entry.bearing + 180 + rand(-10, 10)) : bearing([a.x, a.y], exit.pos);
         a.alt = Math.round(rand(...ALT.transit) / 1000) * 1000;
         a.targetAlt = a.alt;
-        a.exitAlt = this.rules.altitude ? pick(ALT.exitLevels.filter((l) => l !== a.alt)) : 0;
+        // az átrepülő 2000–4000 lábbal a belépési szintje fölött vagy alatt lép ki
+        a.exitAlt = this.rules.altitude ? clamp(a.alt + pick([-4000, -3000, -2000, 2000, 3000, 4000]), 8000, 18000) : 0;
         a.exitGate = exit.letter;
         a.fuel = FUEL.transit;
         this.aircraft.push(a);
@@ -320,7 +325,7 @@ class Sim {
         a.targetSpd = 0;
         a.alt = 0;
         a.exitAlt = this.rules.altitude ? pick(ALT.exitLevels) : 0;
-        a.targetAlt = this.rules.altitude ? ALT.departureInitial : 10000;
+        a.targetAlt = this.rules.altitude ? ALT.departureInitial : 9000;
         a.exitGate = gate.letter;
         a.groundFuel = FUEL.departureGround;
         a.fuel = FUEL.departureAir;
@@ -417,6 +422,7 @@ class Sim {
     // Minden parancs [ok, üzenet] párt ad vissza.
     command(cmd) {
         const a = cmd.id != null ? this.find(cmd.id) : null;
+        if (a && a.fogged && a.state === 'airborne') return [false, `${a.callsign} ködben van, nem tudja, hol jár – amíg ki nem ér, nem irányítható.`];
         switch (cmd.type) {
             case 'addWaypoint': return this._cmdAddWaypoint(a, cmd);
             case 'moveWaypoint': return this._cmdMoveWaypoint(a, cmd);
@@ -595,7 +601,7 @@ class Sim {
     step(dt) {
         this.time += dt;
         this._spawnTick(dt);
-        if (this.rules.storms) this._stormTick(dt);
+        this._weatherTick(dt);
         if (this.rules.emergencies) this._emergencyTick(dt);
         if (this.rules.constraints) this._constraintTick(dt);
         this._runwayTick(dt);
@@ -604,60 +610,110 @@ class Sim {
         this._checkStorms();
     }
 
-    // ---------- zivatarok ----------
-    _stormTick(dt) {
-        this.timers.storm -= dt;
-        if (this.timers.storm <= 0 && this.storms.length < 2) {
-            this.timers.storm = rand(240, 420);
-            const brg = rand(0, 360);
-            const start = edgePoint(brg);
-            const r = rand(3.5, 5.5);
-            const pos = fromBearing(start, brg, r * 0.6);
-            const heading = norm360(brg + 180 + rand(-40, 40));
-            this.storms.push({
-                id: this.nextStormId++,
-                x: pos[0], y: pos[1],
-                r,
-                hdg: heading,
-                spd: rand(0.012, 0.025), // nm/s
-                age: 0,
-                life: rand(700, 1200),
-                turnIn: rand(60, 150)
-            });
-            this._event('warn', 'Zivatar közeledik a légtér szélén. Kerüld a piros magot!', null, 'warn');
+    // ---------- időjárás: zivatar és köd ----------
+    // Mindkettő kicsi, lassan sodródik, és egyszerre legfeljebb egy-egy lehet a légtérben.
+    _spawnWeather(kind) {
+        const r = kind === 'storm' ? rand(2.5, 3.5) : rand(2, 3.5);
+        // a légtér belsejében, de a reptértől távolabb jelenik meg, és lassan befelé sodródik
+        let pos;
+        for (let tries = 0; tries < 20; tries++) {
+            pos = [rand(-AIRSPACE.hw + r, AIRSPACE.hw - r), rand(-AIRSPACE.hh + r, AIRSPACE.hh - r)];
+            const busy = this.aircraft.some((a) => a.state !== 'ground' && dist([a.x, a.y], pos) < r + 3);
+            if (Math.hypot(pos[0], pos[1]) > 9 && !busy) break;
         }
-        for (const s of this.storms) {
-            s.age += dt;
-            s.turnIn -= dt;
-            if (s.turnIn <= 0) {
-                s.turnIn = rand(60, 150);
-                s.hdg = norm360(s.hdg + rand(-35, 35));
-                s.spd = clamp(s.spd * rand(0.7, 1.3), 0.008, 0.03);
-            }
-            s.x += Math.sin(toRad(s.hdg)) * s.spd * dt;
-            s.y += Math.cos(toRad(s.hdg)) * s.spd * dt;
+        const cell = {
+            id: this.nextStormId++,
+            x: pos[0], y: pos[1],
+            r,
+            hdg: norm360(bearing(pos, [0, 0]) + rand(-70, 70)),
+            spd: rand(0.006, 0.012), // nm/s – nagyon lassú
+            age: 0,
+            life: kind === 'storm' ? rand(600, 900) : rand(500, 800),
+            turnIn: rand(90, 180)
+        };
+        if (kind === 'storm') {
+            this.storms.push(cell);
+            this._event('warn', 'Zivatar alakult ki a légtérben. A piros magba repülés a műszak végét jelenti!', null, 'warn');
+        } else {
+            this.fogs.push(cell);
+            this._event('warn', 'Köd ereszkedett le. A benne repülő gépek nem irányíthatók, amíg ki nem érnek.', null, 'warn');
         }
-        this.storms = this.storms.filter((s) => s.age < s.life && insideAirspace(s.x, s.y, s.r + 2));
     }
 
-    // a mag a zivatar életének végén eltűnik
+    _driftCells(cells, dt) {
+        for (const c of cells) {
+            c.age += dt;
+            c.turnIn -= dt;
+            if (c.turnIn <= 0) {
+                c.turnIn = rand(90, 180);
+                c.hdg = norm360(c.hdg + rand(-30, 30));
+                c.spd = clamp(c.spd * rand(0.8, 1.2), 0.004, 0.014);
+            }
+            c.x += Math.sin(toRad(c.hdg)) * c.spd * dt;
+            c.y += Math.cos(toRad(c.hdg)) * c.spd * dt;
+        }
+        return cells.filter((c) => c.age < c.life && insideAirspace(c.x, c.y, c.r));
+    }
+
+    _weatherTick(dt) {
+        if (this.rules.storms) {
+            this.timers.storm -= dt;
+            if (this.timers.storm <= 0) {
+                this.timers.storm = rand(360, 600);
+                if (!this.storms.length) this._spawnWeather('storm');
+            }
+        }
+        if (this.rules.fog) {
+            this.timers.fog -= dt;
+            if (this.timers.fog <= 0) {
+                this.timers.fog = rand(360, 600);
+                if (!this.fogs.length) this._spawnWeather('fog');
+            }
+        }
+        this.storms = this._driftCells(this.storms, dt);
+        this.fogs = this._driftCells(this.fogs, dt);
+    }
+
+    // a zivatar rétegei: külső (zöld) és középső (sárga) átrepülhető, a mag (piros) nem
     _stormCore(s) {
-        const fade = s.age / s.life;
-        if (fade > 0.85) return 0;
-        return s.r * 0.32;
+        // születéskor és a vége felé a mag kisebb, az utolsó 10%-ban eltűnik
+        const f = s.age / s.life;
+        if (f > 0.9) return 0;
+        const grow = clamp(s.age / 60, 0.4, 1);
+        return s.r * 0.3 * grow;
+    }
+
+    inFog(x, y) {
+        return this.fogs.some((f) => dist([x, y], [f.x, f.y]) < f.r);
     }
 
     _checkStorms() {
+        for (const a of this.aircraft) a.stormWarn = false;
         if (!this.storms.length) return;
         for (const a of this.aircraft) {
             if (a.state !== 'airborne' && a.state !== 'final') continue;
             for (const s of this.storms) {
                 const core = this._stormCore(s);
-                const key = `${a.id}-${s.id}`;
-                if (core > 0 && dist([a.x, a.y], [s.x, s.y]) < core) {
-                    if (!this.stormHits.has(key)) {
-                        this.stormHits.add(key);
+                if (core <= 0) continue;
+                const d = dist([a.x, a.y], [s.x, s.y]);
+                if (d < core) {
+                    if (!this.gameOver) {
                         this._incident(a, 'berepült a zivatar piros magjába');
+                        this.gameOver = { reason: `${a.callsign} berepült a zivatar piros magjába.`, callsign: a.callsign };
+                        this._event('incident', `VÉGE A MŰSZAKNAK: ${a.callsign} berepült a zivatar magjába.`, a.id, 'incident');
+                    }
+                    return;
+                }
+                // előrejelzés: a jelenlegi irányában 25 mp-en belül a magba érne
+                const ahead = fromBearing([a.x, a.y], a.hdg, a.spd * KT_TO_NMPS * 25);
+                if (d < core + 4 && pointSegmentDistance([s.x, s.y], [a.x, a.y], ahead) < core + 0.3) {
+                    if (!a.stormWarn) {
+                        a.stormWarn = true;
+                        const key = `${a.id}-${s.id}`;
+                        if (!this.stormHits.has(key)) {
+                            this.stormHits.add(key);
+                            this._event('incident', `FIGYELEM: ${a.callsign} a zivatar magja felé tart – fordítsd el!`, a.id, 'stormWarn');
+                        }
                     }
                 }
             }
@@ -807,6 +863,15 @@ class Sim {
             return;
         }
 
+        // ködben a pilóta nem tudja, hol van: egyenesen repül tovább, és nem irányítható
+        a.fogged = this.inFog(a.x, a.y);
+        if (a.fogged) {
+            this._approachSpeedAndAlt(a, dt);
+            this._move(a, dt);
+            this._checkExit(a);
+            return;
+        }
+
         let target = null;
         if (a.hold) {
             a.hdg = norm360(a.hdg + TURN_RATE * dt);
@@ -840,11 +905,15 @@ class Sim {
         }
         if (target) this._turnToward(a, bearing([a.x, a.y], target), dt);
         // magasság nélküli játékban az indulók és átrepülők maguktól a kilépési szintre emelkednek
-        if (!this.rules.altitude && a.kind !== 'arr') a.targetAlt = Math.max(a.targetAlt, 10000);
+        if (!this.rules.altitude && a.kind !== 'arr') a.targetAlt = Math.max(a.targetAlt, 9000);
         this._approachSpeedAndAlt(a, dt);
         this._move(a, dt);
 
-        // kilépés a légtérből
+        this._checkExit(a);
+    }
+
+    // kilépés a légtérből
+    _checkExit(a) {
         if (!insideAirspace(a.x, a.y, 0.5)) {
             if ((a.kind === 'dep' || a.kind === 'transit') && a.exitGate) {
                 const gate = this._gate(a.exitGate);
@@ -986,9 +1055,12 @@ class Sim {
                 f: Math.round(a.fuel),
                 gf: Math.round(a.groundFuel),
                 cf: a.conflict,
-                em: a.emergency ? Math.max(0, Math.round(a.emergencyLeft)) : null
+                em: a.emergency ? Math.max(0, Math.round(a.emergencyLeft)) : null,
+                fg: !!a.fogged && a.state === 'airborne',
+                sw: !!a.stormWarn
             })),
             runways: this.runways.map((r) => ({ e: r.activeEnd, w: Math.ceil(r.closingIn), c: Math.ceil(r.closedFor) })),
+            fogs: this.fogs.map((f) => ({ id: f.id, x: Math.round(f.x * 100) / 100, y: Math.round(f.y * 100) / 100, r: r1(f.r) })),
             storms: this.storms.map((s) => ({ id: s.id, x: Math.round(s.x * 100) / 100, y: Math.round(s.y * 100) / 100, r: r1(s.r), core: r1(this._stormCore(s)), h: Math.round(s.hdg) }))
         };
     }

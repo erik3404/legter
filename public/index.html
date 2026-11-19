@@ -2,7 +2,8 @@
 <html lang="hu">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#0b111b">
     <title>Légtér – többjátékos légiirányítás</title>
     <link rel="stylesheet" href="style.css">
 </head>
@@ -14,7 +15,7 @@
             <div class="tb-label">Reptér</div>
             <div class="tb-value" id="tb-airport">–</div>
         </div>
-        <div class="tb-block">
+        <div class="tb-block tb-room-block">
             <div class="tb-label">Szoba</div>
             <div class="tb-value mono" id="tb-room">–</div>
         </div>
@@ -40,6 +41,7 @@
             </div>
             <button id="btn-pause" class="btn">Szünet</button>
             <button id="btn-end" class="btn ghost">Műszak vége</button>
+            <button id="btn-end-mobile" class="btn ghost mobile-only" title="Műszak vége">■</button>
             <button id="btn-sound" class="btn ghost" title="Hangjelzések: be / halk / ki">🔊</button>
             <button id="btn-help" class="btn ghost" title="Irányítás (?)">?</button>
         </div>
@@ -50,6 +52,7 @@
             <canvas id="scope"></canvas>
             <div id="wind" class="mono"></div>
             <div id="toast" hidden></div>
+            <button id="btn-fit" title="Teljes légtér mutatása">⌖</button>
             <div class="map-credit">Térkép: Natural Earth · reptéradatok: openScope</div>
         </div>
         <aside id="sidebar">
@@ -201,11 +204,14 @@
                 </ul>
                 <h3>Színek</h3>
                 <p><span class="arr-c">■ Érkező</span> &nbsp; <span class="dep-c">■ Induló</span> &nbsp; <span class="tr-c">■ Átrepülő</span> &nbsp; <span class="em-c">■ Vészhelyzet</span> &nbsp; <span class="bad-c">◯ Konfliktus</span></p>
-                <p>Zivatar: a zöld és sárga rész átrepülhető, a <span class="bad-c">piros mag</span> incidens. Lezárt kifutóra nem lehet leszállni és felszállni.</p>
+                <p>Zivatar: a zöld és sárga rész átrepülhető, de ha egy gép a <span class="bad-c">piros magba</span> repül, vége a műszaknak.
+                    Ha egy gép a mag felé tart, piros villogó kör és riasztás figyelmeztet.</p>
+                <p>Köd: a benne repülő gép (szürke, „?” jellel) nem tudja, hol jár. Egyenesen repül tovább, és amíg ki nem ér, nem irányítható.
+                    Lezárt kifutóra nem lehet leszállni és felszállni.</p>
                 <h3>Hangok</h3>
                 <p>Felfelé lépő csengő: új induló vár (40 mp-enként emlékeztet, ha sokáig vár) · rövid pitty: érkező lép be ·
                     két mély pitty: átrepülő · gyors dupla sípolás: két gép túl közel · ding: sikeres leszállás/kilépés ·
-                    mély zúgás: incidens · sziréna: vészhelyzet. A 🔊 gombbal halkíthatod vagy kikapcsolhatod.</p>
+                    mély zúgás: incidens · sziréna: vészhelyzet · gyors magas–mély riasztás: egy gép a zivatarmag felé tart. A 🔊 gombbal halkíthatod vagy kikapcsolhatod.</p>
                 <h3>Cél</h3>
                 <p>Az érkezőket juttasd le egy kifutóra, az indulókat és átrepülőket a kijelölt kapun (A–F) küldd ki.
                     Tarts legalább 3 nm vagy 1000 láb távolságot. Figyeld az üzemanyagot és a földi várakozási időt.</p>

@@ -287,9 +287,11 @@
                 b.classList.toggle('on', Number(b.dataset.speed) === r.speed);
                 b.disabled = !isHost();
             }
-            $('btn-pause').textContent = r.paused ? '▶ Folytatás' : 'Ⅱ Szünet';
+            const narrow = window.innerWidth < 760;
+            $('btn-pause').textContent = r.paused ? (narrow ? '▶' : '▶ Folytatás') : (narrow ? 'Ⅱ' : 'Ⅱ Szünet');
             $('btn-pause').disabled = !isHost() || !r.started;
             $('btn-end').disabled = !isHost() || !r.started;
+            $('btn-end-mobile').disabled = !isHost() || !r.started;
         }
     }
 
@@ -313,6 +315,8 @@
         let right;
         if (ground) {
             right = `<div class="timer ${a.gf < 60 ? 'low' : ''}">FÖLD ${a.gf}s</div>`;
+        } else if (a.fg) {
+            right = '<div class="timer">KÖDBEN</div>';
         } else if (a.em != null) {
             right = `<div class="timer low">VÉSZ ${fmtTime(a.em)}</div>`;
         } else {
@@ -383,7 +387,9 @@
             const owners = Rules.ownersOf(a, state.room.settings, state.room.players).map((p) => p.name);
             ownerNote = `<div class="owner-note">Nem a te géped${owners.length ? ` – ${esc(owners.join(', '))} irányítja` : ''}.</div>`;
         }
-        const emBanner = a.em != null ? `<div class="em-banner">VÉSZHELYZET – még ${fmtTime(a.em)} a leszállásig</div>` : '';
+        let emBanner = a.em != null ? `<div class="em-banner">VÉSZHELYZET – még ${fmtTime(a.em)} a leszállásig</div>` : '';
+        if (a.fg) emBanner += '<div class="fog-banner">KÖDBEN – a pilóta nem tudja, hol jár. Egyenesen repül tovább, és amíg ki nem ér, nem irányítható.</div>';
+        if (a.sw) emBanner += '<div class="storm-banner">ZIVATAR! A gép a piros mag felé tart – fordítsd el, különben vége a műszaknak.</div>';
         card.innerHTML = `
             ${emBanner}
             <div class="sel-head"><span class="cs" style="color:${acColor(a)}">${a.cs}</span><span class="badge" style="color:${acColor(a)}">${KIND_LABEL[a.k]}</span></div>
@@ -395,7 +401,7 @@
                 ${alt ? `<div><div class="tb-label">Magasság</div><div class="v">${fl(a.al)}${a.ta !== a.al ? ` → ${fl(a.ta)}` : ''}</div></div>` : ''}
                 <div><div class="tb-label">Sebesség</div><div class="v">${a.s}${a.ts !== a.s ? ` → ${a.ts}` : ''} kt</div></div>
             </div>
-            ${locked ? '' : actions}
+            ${locked || a.fg ? '' : actions}
             ${ownerNote}`;
     }
 
@@ -598,8 +604,8 @@
 
     function showSummary(m) {
         const s = m.stats;
-        $('sum-title').textContent = `${fmtTime(m.time)} műszak · ${s.score} pont`;
-        $('sum-body').innerHTML = `<div class="sum-stats">
+        $('sum-title').textContent = m.gameOver ? `Vége a műszaknak · ${s.score} pont` : `${fmtTime(m.time)} műszak · ${s.score} pont`;
+        $('sum-body').innerHTML = `${m.gameOver ? `<div class="storm-banner">⛈ ${esc(m.gameOver.reason)} (${fmtTime(m.time)} után)</div>` : ''}<div class="sum-stats">
             <div><b class="arr-c">${s.landed}</b>leszállt</div><div><b class="dep-c">${s.departed}</b>felszállt</div>
             <div><b class="tr-c">${s.transited}</b>átrepült</div><div><b class="bad-c">${s.incidents}</b>incidens</div></div>
             <p class="hint">Alappont: ${s.base} · szorzó: ×${(m.multiplier || 1).toFixed(2)}${s.emergencies ? ` · vészhelyzetből leszállt: ${s.emergencies}` : ''}</p>
@@ -906,6 +912,10 @@
                 ctx.lineWidth = 1;
                 ctx.stroke();
             }
+            ctx.fillStyle = 'rgba(255,140,150,0.9)';
+            ctx.font = '600 10px ui-monospace, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('ZIVATAR', sx, sy - s.r * k - 6);
             // sodródás iránya
             const ang = s.h * Math.PI / 180;
             const ax = sx + Math.sin(ang) * (s.r * k + 14);
@@ -920,6 +930,41 @@
             ctx.lineTo(ax - Math.sin(ang + 0.5) * 7, ay + Math.cos(ang + 0.5) * 7);
             ctx.stroke();
             void now;
+        }
+    }
+
+    // ---------- köd ----------
+    function drawFogs(now) {
+        if (!state.snap || !state.snap.fogs) return;
+        const k = scale();
+        for (const f of state.snap.fogs) {
+            const [fx, fy] = toScreen(f.x, f.y);
+            // több egymást fedő, lágy szélű folt: „gomolygó” köd
+            for (let i = 0; i < 7; i++) {
+                const ang = (i / 7) * Math.PI * 2 + f.id;
+                const off = i === 0 ? 0 : f.r * 0.45;
+                const cx = fx + Math.cos(ang + now / 9000) * off * k;
+                const cy = fy + Math.sin(ang + now / 9000) * off * k;
+                const rr = f.r * (i === 0 ? 0.8 : 0.6) * k;
+                const g = ctx.createRadialGradient(cx, cy, rr * 0.2, cx, cy, rr);
+                g.addColorStop(0, 'rgba(205,215,228,0.28)');
+                g.addColorStop(1, 'rgba(205,215,228,0)');
+                ctx.fillStyle = g;
+                ctx.beginPath();
+                ctx.arc(cx, cy, rr, 0, Math.PI * 2);
+                ctx.fill();
+            }
+            ctx.strokeStyle = 'rgba(205,215,228,0.35)';
+            ctx.setLineDash([3, 6]);
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(fx, fy, f.r * k, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.fillStyle = 'rgba(220,228,238,0.75)';
+            ctx.font = '600 10px ui-monospace, monospace';
+            ctx.textAlign = 'center';
+            ctx.fillText('KÖD', fx, fy - f.r * k - 6);
         }
     }
 
@@ -1221,7 +1266,23 @@
                 ctx.stroke();
             }
 
-            drawPlane(sx, sy, p.h, color, a.c === 'wide' ? 10 : a.c === 'turboprop' ? 7.5 : 8.5);
+            if (a.sw) {
+                const pulse = 0.5 + 0.5 * Math.sin(now / 110);
+                ctx.strokeStyle = `rgba(255,77,94,${0.5 + pulse * 0.5})`;
+                ctx.setLineDash([4, 3]);
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.arc(sx, sy, 22, 0, Math.PI * 2);
+                ctx.stroke();
+                ctx.setLineDash([]);
+            }
+            drawPlane(sx, sy, p.h, a.fg ? '#9aa6b5' : color, a.c === 'wide' ? 10 : a.c === 'turboprop' ? 7.5 : 8.5);
+            if (a.fg) {
+                ctx.fillStyle = '#e6ecf4';
+                ctx.font = '600 11px system-ui, sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('?', sx, sy - 12);
+            }
 
             // adatblokk
             let line1 = `${a.cs} ${a.em != null ? 'VÉSZ' : KIND_LABEL[a.k]}`;
@@ -1238,8 +1299,11 @@
             const lines = [line1, line2];
             ctx.font = '11px ui-monospace, monospace';
             const w = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 10;
-            const bx = sx + 16;
-            const by = sy - 30;
+            // a képernyő szélén az adatblokk a gép másik oldalára kerül
+            let bx = sx + 16;
+            let by = sy - 30;
+            if (bx + w > W - 4) bx = sx - 16 - w;
+            if (by < 4) by = sy + 14;
             ctx.fillStyle = 'rgba(14,22,34,0.82)';
             ctx.fillRect(bx, by, w, 30);
             ctx.strokeStyle = a.cf ? COLORS.bad : a.em != null ? COLORS.em : 'rgba(201,212,227,0.25)';
@@ -1257,7 +1321,13 @@
             ctx.fillText(lines[0], bx + 6, by + 12);
             ctx.fillStyle = COLORS.text;
             ctx.fillText(lines[1], bx + 6, by + 25);
-            if (a.em != null) {
+            if (a.sw) {
+                ctx.fillStyle = COLORS.bad;
+                ctx.fillText('ZIVATAR! FORDÍTSD EL', bx + 6, by + 40);
+            } else if (a.fg) {
+                ctx.fillStyle = '#c3ccd8';
+                ctx.fillText('KÖDBEN – NEM IRÁNYÍTHATÓ', bx + 6, by + 40);
+            } else if (a.em != null) {
                 ctx.fillStyle = COLORS.em;
                 ctx.fillText(`VÉSZ ${fmtTime(a.em)}`, bx + 6, by + 40);
             } else if (a.f < 90 && a.st !== 'rollout') {
@@ -1276,6 +1346,7 @@
         if (state.info) {
             drawBackground();
             drawSectors();
+            drawFogs(now);
             drawStorms(now);
             drawRunways();
             drawGates();
@@ -1300,7 +1371,7 @@
                 const [x, y] = toScreen(p.x, p.y);
                 return { a, d: Math.hypot(x - sx, y - sy) };
             })
-            .filter((h) => h.d < 16)
+            .filter((h) => h.d < 16 * hitScale())
             .sort((p, q) => p.d - q.d)
             .map((h) => h.a);
     }
@@ -1309,7 +1380,7 @@
         const route = routeFor(a);
         for (let i = 0; i < route.length; i++) {
             const [x, y] = toScreen(...route[i]);
-            if (Math.hypot(x - sx, y - sy) < 10) return i;
+            if (Math.hypot(x - sx, y - sy) < 10 * hitScale()) return i;
         }
         return -1;
     }
@@ -1324,7 +1395,7 @@
             const dy = by - ay;
             const len2 = dx * dx + dy * dy;
             const t = len2 ? Math.max(0, Math.min(1, ((sx - ax) * dx + (sy - ay) * dy) / len2)) : 0;
-            if (t > 0.05 && t < 0.95 && Math.hypot(sx - (ax + t * dx), sy - (ay + t * dy)) < 6) return i;
+            if (t > 0.05 && t < 0.95 && Math.hypot(sx - (ax + t * dx), sy - (ay + t * dy)) < 6 * hitScale()) return i;
         }
         return -1;
     }
@@ -1333,7 +1404,7 @@
     function runwayAt(sx, sy) {
         // több találatnál (párhuzamos kifutók) mindig a legközelebbi nyer
         let best = null;
-        let bestD = 12;
+        let bestD = 12 * hitScale();
         for (const h of runwayLabelHits) {
             const d = Math.hypot(h.x - sx, h.y - sy);
             if (d < bestD) { bestD = d; best = h.index; }
@@ -1351,15 +1422,70 @@
         return best;
     }
 
+    // érintésnél nagyobb a koppintási terület
+    let touchMode = false;
+    const hitScale = () => (touchMode ? 1.8 : 1);
+
     function canvasPos(e) {
         const r = canvas.getBoundingClientRect();
         return [e.clientX - r.left, e.clientY - r.top];
     }
 
     let lastMoveSent = 0;
+    const pointers = new Map();   // aktív ujjak / lenyomott egérgombok
+    let pinch = null;             // két ujjas nagyítás állapota
+    let pinchLock = false;        // csípés után minden ujj felengedéséig nem kezelünk koppintást
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
-    canvas.addEventListener('mousedown', (e) => {
+
+    // kattintás vagy koppintás üres helyre: útpont a kijelölt gépnek, vagy kijelölés megszüntetése
+    function emptyClick(sx, sy, mods) {
+        const sel = state.selected != null ? state.acById.get(state.selected) : null;
+        if (!sel) {
+            select(null);
+            return;
+        }
+        if (!canControl(sel)) {
+            addLog('warn', `${sel.cs} nem a te géped.`);
+            return;
+        }
+        const [x, y] = toWorld(sx, sy);
+        if (sel.fg) {
+            addLog('warn', `${sel.cs} ködben van, amíg ki nem ér, nem irányítható.`);
+            return;
+        }
+        if (sel.st === 'ground' || sel.st === 'takeoff' || sel.st === 'rollout') {
+            if (sel.st === 'ground') addLog('warn', `${sel.cs} még a földön van – előbb szállj fel vele (X).`);
+            return;
+        }
+        const as = airspace();
+        if (Math.abs(x) > as.hw + 0.5 || Math.abs(y) > as.hh + 0.5) return;
+        if (mods.shiftKey) {
+            cmd('replaceRoute', { id: sel.id, x, y });
+            sel.r = [[x, y]];
+        } else {
+            cmd('addWaypoint', { id: sel.id, x, y });
+        }
+    }
+
+    function startPinch() {
+        const [p1, p2] = [...pointers.values()];
+        const mid = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
+        pinch = { d: Math.hypot(p1[0] - p2[0], p1[1] - p2[1]) || 1, zoom: state.view.zoom, world: toWorld(...mid) };
+        state.drag = null;
+        state.localRoute = null;
+        pinchLock = true;
+    }
+
+    canvas.addEventListener('pointerdown', (e) => {
+        touchMode = e.pointerType === 'touch' || e.pointerType === 'pen';
+        try { canvas.setPointerCapture(e.pointerId); } catch (err) { /* nem baj */ }
         const [sx, sy] = canvasPos(e);
+        pointers.set(e.pointerId, [sx, sy]);
+        if (pointers.size === 2) {
+            startPinch();
+            return;
+        }
+        if (pointers.size > 2 || pinchLock) return;
         if (e.button === 2 || e.button === 1) {
             state.drag = { type: 'pan', sx, sy, panX: state.view.panX, panY: state.view.panY };
             return;
@@ -1406,37 +1532,45 @@
             return;
         }
 
-        if (sel) {
-            if (!canControl(sel)) {
-                addLog('warn', `${sel.cs} nem a te géped.`);
-                return;
-            }
-            const [x, y] = toWorld(sx, sy);
-            if (sel.st === 'ground' || sel.st === 'takeoff' || sel.st === 'rollout') {
-                if (sel.st === 'ground') addLog('warn', `${sel.cs} még a földön van – előbb szállj fel vele (X).`);
-                return;
-            }
-            const as = airspace();
-            if (Math.abs(x) > as.hw + 0.5 || Math.abs(y) > as.hh + 0.5) return;
-            if (e.shiftKey) cmd('replaceRoute', { id: sel.id, x, y });
-            else cmd('addWaypoint', { id: sel.id, x, y });
-            if (e.shiftKey) sel.r = [[x, y]];
+        // érintésnél csak felengedéskor döntjük el, hogy koppintás (útpont) vagy húzás (térkép mozgatása)
+        if (touchMode) {
+            state.drag = { type: 'tap', sx, sy };
             return;
         }
-        select(null);
+        emptyClick(sx, sy, e);
     });
 
-    window.addEventListener('mousemove', (e) => {
-        const d = state.drag;
-        if (!d) return;
+    canvas.addEventListener('pointermove', (e) => {
         const [sx, sy] = canvasPos(e);
+        if (!pointers.has(e.pointerId)) {
+            if (e.pointerType === 'mouse') updateCursor(sx, sy);
+            return;
+        }
+        pointers.set(e.pointerId, [sx, sy]);
+        if (pinch && pointers.size >= 2) {
+            const [p1, p2] = [...pointers.values()];
+            const d = Math.hypot(p1[0] - p2[0], p1[1] - p2[1]) || 1;
+            const mid = [(p1[0] + p2[0]) / 2, (p1[1] + p2[1]) / 2];
+            state.view.zoom = Math.max(0.7, Math.min(8, pinch.zoom * (d / pinch.d)));
+            const now = toWorld(...mid);
+            state.view.panX += now[0] - pinch.world[0];
+            state.view.panY += now[1] - pinch.world[1];
+            return;
+        }
+        let d = state.drag;
+        if (!d) return;
+        if (d.type === 'tap') {
+            if (Math.hypot(sx - d.sx, sy - d.sy) < 10) return;
+            d = { type: 'pan', sx: d.sx, sy: d.sy, panX: state.view.panX, panY: state.view.panY };
+            state.drag = d;
+        }
         if (d.type === 'pan') {
             const k = scale();
             state.view.panX = d.panX + (sx - d.sx) / k;
             state.view.panY = d.panY - (sy - d.sy) / k;
             return;
         }
-        if (!d.moved && Math.hypot(sx - d.sx, sy - d.sy) < 4) return;
+        if (!d.moved && Math.hypot(sx - d.sx, sy - d.sy) < (touchMode ? 8 : 4)) return;
         const [x, y] = toWorld(sx, sy);
         if (d.type === 'seg' && !d.moved) {
             const a = state.acById.get(d.id);
@@ -1455,13 +1589,24 @@
         }
     });
 
-    window.addEventListener('mouseup', (e) => {
+    function onPointerEnd(e) {
+        pointers.delete(e.pointerId);
+        if (pinch) {
+            if (pointers.size < 2) pinch = null;
+            state.drag = null;
+            if (pointers.size === 0) pinchLock = false;
+            return;
+        }
+        if (pointers.size === 0) pinchLock = false;
         const d = state.drag;
         state.drag = null;
-        if (!d || d.type === 'pan') return;
-        if (d.type === 'wp') {
+        if (!d || d.type === 'pan' || e.type === 'pointercancel') return;
+        const [sx, sy] = canvasPos(e);
+        if (d.type === 'tap') {
+            emptyClick(d.sx, d.sy, { shiftKey: false, altKey: false });
+        } else if (d.type === 'wp') {
             if (d.moved) {
-                const [x, y] = toWorld(...canvasPos(e));
+                const [x, y] = toWorld(sx, sy);
                 cmd('moveWaypoint', { id: d.id, index: d.index, x, y });
             } else {
                 cmd('removeWaypoint', { id: d.id, index: d.index });
@@ -1469,10 +1614,12 @@
             }
             setTimeout(() => { if (!state.drag) state.localRoute = null; }, 350);
         } else if (d.type === 'seg' && !d.moved) {
-            const [x, y] = toWorld(...canvasPos(e));
+            const [x, y] = toWorld(sx, sy);
             cmd('addWaypoint', { id: d.id, x, y, index: d.index });
         }
-    });
+    }
+    canvas.addEventListener('pointerup', onPointerEnd);
+    canvas.addEventListener('pointercancel', onPointerEnd);
 
     canvas.addEventListener('wheel', (e) => {
         e.preventDefault();
@@ -1484,16 +1631,14 @@
         state.view.panY += after[1] - before[1];
     }, { passive: false });
 
-    canvas.addEventListener('mousemove', (e) => {
-        if (state.drag) return;
-        const [sx, sy] = canvasPos(e);
+    function updateCursor(sx, sy) {
         const sel = state.selected != null ? state.acById.get(state.selected) : null;
         let cursor = sel ? 'crosshair' : 'default';
         if (aircraftAt(sx, sy).length) cursor = 'pointer';
         else if (sel && (sel.st === 'ground' || sel.k === 'arr') && runwayAt(sx, sy) != null) cursor = 'pointer';
         else if (sel && (waypointAt(sel, sx, sy) >= 0 || segmentAt(sel, sx, sy) >= 0)) cursor = 'move';
         canvas.style.cursor = cursor;
-    });
+    }
 
     // ---------- billentyűzet ----------
     function cycleList(kind, backwards) {
@@ -1588,6 +1733,8 @@
             addLog('info', `Hangjelzések: ${{ on: 'bekapcsolva', quiet: 'halkan', off: 'kikapcsolva' }[lvl]}.`);
         };
         $('btn-help').onclick = () => { $('help').hidden = false; };
+        $('btn-fit').onclick = () => { state.view = { zoom: 1, panX: 0, panY: 0 }; };
+        $('btn-end-mobile').onclick = () => $('btn-end').click();
         $('help-close').onclick = () => { $('help').hidden = true; };
         $('help').onclick = (e) => { if (e.target.id === 'help') $('help').hidden = true; };
         $('btn-sum-close').onclick = () => { $('summary').hidden = true; };
@@ -1603,6 +1750,7 @@
     async function main() {
         resize();
         window.addEventListener('resize', () => { resize(); bg.key = ''; });
+        if (window.ResizeObserver) new ResizeObserver(() => { resize(); bg.key = ''; }).observe($('scope-wrap'));
         bindLobby();
         bindSidebar();
         requestAnimationFrame(frame);

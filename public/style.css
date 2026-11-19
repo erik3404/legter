@@ -30,7 +30,7 @@ kbd {
 .tr-c { color: var(--tr); }
 .bad-c { color: var(--bad); }
 
-#app { display: grid; grid-template-rows: auto 1fr auto; height: 100vh; }
+#app { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; height: 100vh; height: 100dvh; }
 #app.hide-top #topbar { display: none; }
 
 /* felső sáv */
@@ -206,12 +206,6 @@ table.keys td:first-child { white-space: nowrap; }
 .sum-stats b { display: block; font: 600 24px var(--mono); }
 .sum-inc { max-height: 180px; overflow-y: auto; font-size: 13px; color: var(--muted); }
 
-@media (max-width: 900px) {
-    #main { grid-template-columns: 1fr; grid-template-rows: 1fr 300px; }
-    #sidebar { border-left: 0; border-top: 1px solid var(--line); grid-template-rows: auto; overflow-y: auto; }
-    .tb-stats { display: none; }
-    .help-grid, .grid2 { grid-template-columns: 1fr; }
-}
 
 .map-credit { position: absolute; left: 10px; bottom: 6px; color: #4b5a6e; font-size: 10px; pointer-events: none; }
 
@@ -268,7 +262,7 @@ table.keys td:first-child { white-space: nowrap; }
 
 /* értesítések */
 #toast {
-    position: absolute; top: 14px; left: 50%; transform: translateX(-50%); z-index: 5;
+    position: absolute; bottom: 36px; left: 50%; transform: translateX(-50%); z-index: 5;
     background: rgba(17,26,39,.96); border: 1px solid var(--dep); border-left: 4px solid var(--dep);
     border-radius: 10px; padding: 10px 16px; font-size: 14px; cursor: pointer; box-shadow: 0 10px 30px rgba(0,0,0,.45);
     animation: toast-in .25s ease-out; max-width: 80%;
@@ -276,8 +270,98 @@ table.keys td:first-child { white-space: nowrap; }
 #toast b { font-family: var(--mono); color: var(--dep); }
 #toast.em { border-color: var(--em); }
 #toast.em b { color: var(--em); }
-@keyframes toast-in { from { opacity: 0; transform: translate(-50%, -8px); } }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
 .list-panel.flash { animation: flash 0.6s ease-in-out 4; }
 @keyframes flash { 50% { background: rgba(95,168,255,.16); } }
 .list-panel.waiting .panel-head .count { color: #fff; background: var(--dep); border-radius: 10px; padding: 0 7px; }
 .log-line.dep, #log-last.dep { color: var(--dep); }
+
+.fog-banner { background: rgba(195,204,216,.1); border: 1px solid #9aa6b5; color: #d5dce6; border-radius: 8px; padding: 6px 10px; font-size: 13px; margin-bottom: 8px; }
+.storm-banner { background: rgba(255,77,94,.12); border: 1px solid var(--bad); color: #ff8a96; border-radius: 8px; padding: 6px 10px; font-size: 13px; margin-bottom: 8px; }
+
+/* ---------- reszponzív elrendezés ---------- */
+#scope { touch-action: none; }
+.mobile-only { display: none; }
+@media (orientation: portrait) and (max-width: 1024px) { .mobile-only { display: inline-block; } }
+#btn-fit {
+    position: absolute; right: 12px; top: 12px; z-index: 4; width: 36px; height: 36px; padding: 0;
+    background: rgba(17,26,39,.85); border: 1px solid var(--line); border-radius: 8px; color: var(--text); font-size: 18px;
+}
+
+/* tablet és kisebb laptop */
+@media (max-width: 1200px) {
+    #main { grid-template-columns: 1fr 300px; }
+    #topbar { gap: 14px; padding: 6px 12px; }
+    .tb-stats { gap: 10px; font-size: 12px; }
+    .tb-stats b { font-size: 14px; }
+    .panel { padding: 10px 12px; }
+}
+
+/* érintőképernyő: nagyobb gombok */
+@media (pointer: coarse) {
+    .btn { padding: 9px 14px; }
+    .btn-row .btn { padding: 8px 11px; font-size: 13px; }
+    .seg button { padding: 9px 12px; }
+    .ac-row { padding: 9px 10px; }
+}
+
+/* fekvő telefon: keskeny oldalsáv, tömör felső sáv */
+@media (orientation: landscape) and (max-height: 520px) {
+    .mobile-only { display: inline-block; }
+    #btn-end { display: none; }
+    .tb-stats { gap: 8px; }
+    .tb-spacer { flex: 1; }
+    #topbar { flex-wrap: nowrap; }
+    #wind, .map-credit, #log-toggle { display: none; }
+    #toast { bottom: 8px; font-size: 12px; padding: 6px 10px; }
+    #main { grid-template-columns: 1fr 250px; }
+    #topbar { gap: 10px; min-height: 0; padding: 4px 10px; }
+    .brand { font-size: 14px; }
+    .tb-block .tb-label { display: none; }
+    .tb-room-block { display: none; }
+    .tb-stats .stat:not(.score-c):not(.bad-c) { display: none; }
+    .seg button { padding: 4px 7px; }
+    .btn { padding: 5px 9px; font-size: 12px; }
+    #sidebar { grid-template-rows: auto minmax(70px, 1fr) minmax(70px, 1fr) auto; overflow-y: auto; }
+    #sel-card { min-height: 0; }
+    #sel-card h2 { font-size: 16px; }
+    .empty-sel p { display: none; }
+    #players-panel { display: none; }
+    #logbar { padding: 5px 10px; font-size: 12px; }
+}
+
+/* álló telefon / keskeny tablet: radar felül, vezérlés alul */
+@media (orientation: portrait) and (max-width: 1024px) {
+    #topbar { gap: 8px 12px; padding: 6px 10px; }
+    .brand { font-size: 14px; }
+    .tb-block .tb-label { display: none; }
+    .tb-room-block { display: none; }
+    .tb-value { font-size: 13px; }
+    #tb-airport { max-width: 38vw; overflow: hidden; text-overflow: ellipsis; }
+    .tb-stats { order: 5; width: 100%; gap: 12px; font-size: 11px; }
+    .tb-stats b { font-size: 13px; }
+    .tb-spacer { display: none; }
+    .tb-controls { margin-left: auto; gap: 6px; }
+    .seg button { padding: 5px 7px; font-size: 11px; }
+    #btn-end { display: none; }
+    #main { grid-template-columns: 1fr; grid-template-rows: minmax(0, 1fr) minmax(0, 42%); }
+    #sidebar { border-left: 0; border-top: 1px solid var(--line); display: block; overflow-y: auto; }
+    .list-panel .ac-list { max-height: 180px; }
+    #sel-card { min-height: 0; }
+    .empty-sel p { display: none; }
+    #logbar { padding: 6px 10px; font-size: 12px; }
+    #log-toggle { display: none; }
+    #wind, .map-credit { display: none; }
+    .help-grid, .grid2 { grid-template-columns: 1fr; }
+    .dialog { padding: 18px 16px; }
+    .dialog h1 { font-size: 28px; }
+    .airport-cards { grid-template-columns: 1fr; }
+    .rule { grid-template-columns: 22px 1fr; }
+    .rule .rm { grid-column: 2; justify-self: start; }
+    #toast { bottom: 12px; max-width: 94%; font-size: 13px; }
+}
+
+@media (max-width: 420px) {
+    .tb-stats .stat:not(.score-c):not(.bad-c):not(.arr-c) { display: none; }
+    .seg button[data-speed="0.5"], .seg button[data-speed="1.5"] { display: none; }
+}

@@ -4,7 +4,7 @@ const assert = require('node:assert');
 const { Sim, AIRPORTS, AIRSPACE } = require('../shared/sim');
 const Rules = require('../shared/rules');
 
-const QUIET = { storms: false, emergencies: false, constraints: false };
+const QUIET = { storms: false, fog: false, emergencies: false, constraints: false };
 
 function makeSim(icao, rules = {}, extra = {}) {
     const sim = new Sim(icao, Object.assign({ rules: Object.assign({}, QUIET, rules) }, extra));
@@ -138,15 +138,72 @@ test('egymással szembe repülő gépek ütköznek', () => {
     assert.strictEqual(sim.aircraft.length, 0);
 });
 
-test('zivatar: a piros magba repülés incidens', () => {
+test('zivatar: előbb figyelmeztet, a piros magba repülés a műszak végét jelenti', () => {
     const sim = makeSim('LOWW', { storms: true });
     sim.aircraft = [];
     sim.timers.storm = 1e9;
-    sim.storms.push({ id: 1, x: 0, y: 0, r: 5, hdg: 0, spd: 0, age: 0, life: 1000, turnIn: 1e9 });
+    sim.storms.push({ id: 1, x: 0, y: 0, r: 3, hdg: 0, spd: 0, age: 100, life: 1000, turnIn: 1e9 });
     const a = sim._spawnTransit();
-    Object.assign(a, { x: -4, y: 0, hdg: 90, route: [[4, 0]] });
-    for (let i = 0; i < 300; i++) sim.step(0.1);
-    assert.strictEqual(sim.incidentLog.filter((x) => /zivatar/.test(x.reason)).length, 1);
+    Object.assign(a, { x: -5, y: 0, hdg: 90, route: [[4, 0]] });
+    let warned = false;
+    for (let i = 0; i < 600 && !sim.gameOver; i++) {
+        sim.step(0.1);
+        if (a.stormWarn) warned = true;
+    }
+    assert.ok(warned, 'nem figyelmeztetett');
+    assert.ok(sim.gameOver);
+    assert.match(sim.gameOver.reason, /zivatar/);
+});
+
+test('zivatar: a külső rétegen átrepülni szabad', () => {
+    const sim = makeSim('LOWW', { storms: true });
+    sim.aircraft = [];
+    sim.timers.storm = 1e9;
+    sim.storms.push({ id: 1, x: 0, y: 0, r: 3, hdg: 0, spd: 0, age: 100, life: 1000, turnIn: 1e9 });
+    const a = sim._spawnTransit();
+    Object.assign(a, { x: -5, y: 2, hdg: 90, route: [[5, 2]] });
+    for (let i = 0; i < 600; i++) sim.step(0.1);
+    assert.strictEqual(sim.gameOver, null);
+});
+
+test('köd: a benne lévő gép egyenesen repül és nem irányítható, kiérve folytatja az útvonalat', () => {
+    const sim = makeSim('LOWW', { fog: true });
+    sim.aircraft = [];
+    sim.timers.fog = 1e9;
+    sim.fogs.push({ id: 1, x: 0, y: 0, r: 2, hdg: 0, spd: 0, age: 0, life: 1e9, turnIn: 1e9 });
+    const a = sim._spawnTransit();
+    Object.assign(a, { x: -1, y: 0, hdg: 90, route: [[0, -8]] });
+    sim.step(0.1);
+    assert.ok(a.fogged);
+    const hdg = a.hdg;
+    for (let i = 0; i < 20; i++) sim.step(0.1);
+    assert.strictEqual(a.hdg, hdg, 'ködben nem fordulhat');
+    const [ok, msg] = sim.command({ type: 'addWaypoint', id: a.id, x: 5, y: 5 });
+    assert.strictEqual(ok, false);
+    assert.match(msg, /köd/);
+    for (let i = 0; i < 400 && a.fogged; i++) sim.step(0.1);
+    assert.ok(!a.fogged);
+    for (let i = 0; i < 30; i++) sim.step(0.1);
+    assert.notStrictEqual(Math.round(a.hdg), Math.round(hdg), 'kiérve az útvonal felé fordul');
+    assert.ok(sim.command({ type: 'speed', id: a.id, delta: 10 })[0]);
+});
+
+test('időjárás: ritka, kicsi, és egyszerre legfeljebb egy zivatar és egy köd', () => {
+    const sim = new Sim('EDDF', { rules: { storms: true, fog: true, emergencies: false, constraints: false } });
+    let maxStorms = 0;
+    let maxFogs = 0;
+    let stormsSeen = new Set();
+    for (let i = 0; i < 36000 && !sim.gameOver; i++) {
+        sim.step(0.1);
+        maxStorms = Math.max(maxStorms, sim.storms.length);
+        maxFogs = Math.max(maxFogs, sim.fogs.length);
+        for (const st of sim.storms) {
+            stormsSeen.add(st.id);
+            assert.ok(st.r <= 3.5 && st.spd <= 0.014);
+        }
+    }
+    assert.ok(maxStorms <= 1 && maxFogs <= 1);
+    assert.ok(stormsSeen.size >= 1 && stormsSeen.size <= 12, `${stormsSeen.size} zivatar egy óra alatt`);
 });
 
 test('kifutó-ellenőrzés: lezárás után nem lehet felszállni, az érkező elveszti a kifutót', () => {

@@ -59,8 +59,13 @@
         },
         {
             key: 'storms', group: 'events', label: 'Zivatarok',
-            desc: 'Zivatarcellák sodródnak át a légtéren. A zöld és sárga rész átrepülhető, a piros mag incidens.',
+            desc: 'Ritkán egy kis zivatar sodródik lassan a légtérben. A zöld és sárga rész átrepülhető, de ha egy gép a piros magba repül, vége a műszaknak.',
             off: 0.9, on: 1
+        },
+        {
+            key: 'fog', group: 'events', label: 'Köd',
+            desc: 'Ritkán egy kis ködfolt sodródik a légtérben. A benne repülő gép nem tudja, hol jár: egyenesen repül tovább, és amíg ki nem ér, nem irányítható.',
+            off: 0.95, on: 1
         },
         {
             key: 'showAllRoutes', group: 'help', label: 'Minden útvonal látszik',
@@ -72,11 +77,11 @@
     const PRESETS = {
         classic: {
             label: 'Klasszikus',
-            rules: { altitude: false, manualRouting: false, pauseQueue: false, randomGates: false, constraints: true, emergencies: true, storms: true, showAllRoutes: false }
+            rules: { altitude: false, manualRouting: false, pauseQueue: false, randomGates: false, constraints: true, emergencies: true, storms: true, fog: true, showAllRoutes: false }
         },
         hard: {
             label: 'Nehéz',
-            rules: { altitude: true, manualRouting: true, pauseQueue: true, randomGates: true, constraints: true, emergencies: true, storms: true, showAllRoutes: false }
+            rules: { altitude: true, manualRouting: true, pauseQueue: true, randomGates: true, constraints: true, emergencies: true, storms: true, fog: true, showAllRoutes: false }
         }
     };
 

@@ -160,14 +160,42 @@ function startGame(room) {
     room.sim = new Sim(room.settings.airport, room.settings.shift);
     room.paused = false;
     room.queued = [];
+    // csak automatikus teszthez: LEGTER_TEST_WEATHER=1 azonnal zivatart és ködöt hoz
+    if (process.env.LEGTER_TEST_WEATHER) {
+        room.sim.timers.storm = 2;
+        room.sim.timers.fog = 1;
+        if (process.env.LEGTER_TEST_WEATHER === 'gameover') {
+            const sim = room.sim;
+            setTimeout(() => { if (room.sim === sim) sim.gameOver = { reason: 'TESZT123 berepült a zivatar piros magjába.' }; }, 3000);
+        }
+    }
     broadcast(room, { t: 'static', info: room.sim.staticInfo() });
     broadcast(room, { t: 'log', kind: 'info', text: `Műszak indul: ${room.sim.airport.name}. Az első induló gépek már várnak.` });
+    sendRoom(room);
+}
+
+function endGame(room, gameOver) {
+    broadcast(room, { t: 'state', s: room.sim.snapshot(), ev: room.sim.drainEvents() });
+    broadcast(room, {
+        t: 'ended',
+        stats: room.sim.stats,
+        incidents: room.sim.incidentLog,
+        time: room.sim.time,
+        multiplier: room.sim.multiplier,
+        gameOver: gameOver || null
+    });
+    room.sim = null;
+    room.queued = [];
     sendRoom(room);
 }
 
 function tickRoom(room) {
     if (!room.sim) return;
     if (!room.paused) room.sim.step((TICK_MS / 1000) * room.speed);
+    if (room.sim.gameOver) {
+        endGame(room, room.sim.gameOver);
+        return;
+    }
     room.tick += 1;
     if (room.tick % BROADCAST_EVERY === 0) {
         broadcast(room, { t: 'state', s: room.sim.snapshot(), ev: room.sim.drainEvents() });
@@ -232,13 +260,7 @@ function handle(ws, msg) {
             if (isHost && !room.sim) startGame(room);
             break;
         case 'end':
-            if (isHost && room.sim) {
-                broadcast(room, {
-                    t: 'ended', stats: room.sim.stats, incidents: room.sim.incidentLog, time: room.sim.time, multiplier: room.sim.multiplier
-                });
-                room.sim = null;
-                sendRoom(room);
-            }
+            if (isHost && room.sim) endGame(room, null);
             break;
         case 'pause':
             if (isHost) {
