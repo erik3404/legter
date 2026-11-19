@@ -78,7 +78,9 @@ Játék közben a kijelölt gépnél **„Átadom neki”** gombbal átadhatod e
 gombbal elkérheted tőle; a másik fél elfogadja vagy elutasítja. Hárman a **„Közösbe (bárki)”** választással
 bedobhatod a gépet a közösbe: mindenki megkapja a kérést, és aki elsőként elfogadja, azé lesz.
 
-Ha két gép összeütközik, vége a műszaknak.
+Ha két gép összeütközik, vége a műszaknak. A konfliktusjelzés (piros keret, sípolás) csak akkor szól, ha a gépek
+a tervezett útjukon a következő 45 játékmásodpercben ténylegesen túl közel kerülnének egymáshoz; ha elférnek
+egymás mellett vagy előtt, nincs jelzés.
 
 A többiek a 4 betűs szobakóddal vagy a megosztott linkkel lépnek be.
 

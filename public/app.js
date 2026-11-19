@@ -1866,7 +1866,8 @@
             let by = sy - 30;
             if (bx + w > W - 4) bx = sx - 16 - w;
             if (by < 4) by = sy + 14;
-            ctx.fillStyle = 'rgba(14,22,34,0.82)';
+            // félig átlátszó háttér, hogy a mögötte lévő gépek is látsszanak
+            ctx.fillStyle = 'rgba(14,22,34,0.45)';
             ctx.fillRect(bx, by, w, 30);
             ctx.strokeStyle = a.cf ? COLORS.bad : a.em != null ? COLORS.em : 'rgba(201,212,227,0.25)';
             ctx.lineWidth = 1;
@@ -1907,6 +1908,14 @@
             }
             ctx.globalAlpha = 1;
         }
+        // a gépek jelei az adatblokkok fölé kerülnek, hogy egy másik gép táblája ne takarja el őket
+        for (const a of airborne) {
+            const p = posOf(a);
+            const [sx, sy] = toScreen(p.x, p.y);
+            ctx.globalAlpha = multi && !canControl(a) ? 0.45 : 1;
+            drawPlane(sx, sy, p.h, a.fg ? '#9aa6b5' : acColor(a), a.c === 'wide' ? 10 : a.c === 'turboprop' ? 7.5 : 8.5);
+        }
+        ctx.globalAlpha = 1;
     }
 
     function drawPings(now) {
@@ -1978,7 +1987,7 @@
     // ---------- egér ----------
     function aircraftAt(sx, sy) {
         if (!state.snap) return [];
-        return state.snap.aircraft
+        const near = state.snap.aircraft
             .filter((a) => a.st !== 'ground')
             .map((a) => {
                 const p = posOf(a);
@@ -1988,6 +1997,7 @@
             .filter((h) => h.d < 16 * hitScale())
             .sort((p, q) => p.d - q.d)
             .map((h) => h.a);
+        return near;
     }
 
     function waypointAt(a, sx, sy) {

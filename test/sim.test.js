@@ -195,7 +195,10 @@ test('időjárás: ritka, kicsi, és egyszerre legfeljebb egy zivatar és egy k�
     let maxStorms = 0;
     let maxFogs = 0;
     let stormsSeen = new Set();
-    for (let i = 0; i < 36000 && !sim.gameOver; i++) {
+    // forgalom nélkül (különben a magukra hagyott gépek ütközése idő előtt véget vetne a műszaknak)
+    sim.timers.arrival = sim.timers.departure = sim.timers.transit = 1e9;
+    sim.aircraft = [];
+    for (let i = 0; i < 36000; i++) {
         sim.step(0.1);
         maxStorms = Math.max(maxStorms, sim.storms.length);
         maxFogs = Math.max(maxFogs, sim.fogs.length);
@@ -337,7 +340,8 @@ test('kényszerleszállás: a reptéren senki más nem száll le, amíg a gép l
     let otherLandedFirst = false;
     for (let i = 0; i < 9000 && sim.aircraft.includes(em); i++) {
         sim.step(0.1);
-        if (other.state === 'final' || other.state === 'rollout') otherLandedFirst = true;
+        // ha ugyanabban a lépésben a kényszerleszálló már letette a gépet, a másik jogosan indul
+        if ((other.state === 'final' || other.state === 'rollout') && sim.aircraft.includes(em)) otherLandedFirst = true;
     }
     assert.ok(!otherLandedFirst, 'a másik gép nem kezdhet leszállni');
     assert.strictEqual(sim.stats.landed, 1, JSON.stringify(sim.incidentLog));
@@ -493,6 +497,7 @@ test('VIP gép: kifutók zárva, kíséret nélkül incidens, kísérettel lesz�
     const sim = makeSim('LOWW', { security: true });
     sim.timers.hijack = 1e9;
     const dep = sim.aircraft.find((a) => a.state === 'ground');
+    dep.groundFuel = 1e9; // a VIP miatt sokáig vár: ne töröljék a járatot
     sim.aircraft = [dep];
     sim.timers.vip = 0;
     sim.step(0.1);
@@ -680,7 +685,7 @@ test('két leszálló gép között nincs jelzés és incidens, csak ütközés 
     assert.strictEqual(sim.stats.incidents, 0);
     // egy indulóval szemben viszont jelez
     const d = sim._spawnTransit();
-    Object.assign(d, { x: 3, y: 1, hdg: 90, kind: 'dep', route: [[10, 1]] });
+    Object.assign(d, { x: 3, y: 1, hdg: 90, kind: 'dep', route: [[10, 1]], alt: a.alt, targetAlt: a.alt });
     sim._checkSeparation();
     assert.ok(a.conflict && d.conflict);
 });
@@ -746,4 +751,21 @@ test('megközelítés: a legrövidebb úton, a kifutó közelében csatlakozik, 
     // a terv nem változik repülés közben (amíg nem adunk új parancsot)
     for (let i = 0; i < 100; i++) sim.step(0.1);
     if (a.state === 'airborne') assert.deepStrictEqual(sim.snapshot().aircraft.find((x) => x.id === a.id).aj, plan);
+});
+
+test('konfliktusjelzés: ha elférnek egymás előtt/mellett, nincs jelzés', () => {
+    const sim = makeSim('LOWW');
+    sim.aircraft = [];
+    const a = sim._spawnTransit();
+    const b = sim._spawnTransit();
+    // keresztező utak, de b jóval később ér a kereszteződéshez: a előtte simán elfér
+    Object.assign(a, { x: 0, y: -2, hdg: 0, route: [[0, 10]], spd: 250, alt: 10000, targetAlt: 10000 });
+    Object.assign(b, { x: -8, y: 3, hdg: 90, route: [[10, 3]], spd: 160, alt: 10000, targetAlt: 10000 });
+    sim._checkSeparation();
+    assert.strictEqual(a.conflict, false, 'elfér előtte');
+    // ugyanez, de egyszerre érnek a kereszteződéshez: jelez
+    Object.assign(b, { x: -3.6, y: 3, spd: 250 });
+    Object.assign(a, { x: 0, y: -0.6 });
+    sim._checkSeparation();
+    assert.strictEqual(a.conflict, true, 'egyszerre érnek oda');
 });

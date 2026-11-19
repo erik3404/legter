@@ -22,6 +22,9 @@ const CLIMB_RATE = (3000 / 60) * TIME_SCALE; // láb/s
 const DESCENT_RATE = (3000 / 60) * TIME_SCALE;
 const ACCEL = 2 * TIME_SCALE;                // csomó/s levegőben
 const KT_TO_NMPS = TIME_SCALE / 3600;
+// ütközésjelzés: ennyi játékmásodpercre előre nézzük a gépek útját, és ennyi távolságon belül vizsgáljuk őket
+const CONFLICT_HORIZON_S = 45;
+const CONFLICT_SCAN_NM = 12;
 
 const CLASSES = {
     turboprop: { label: 'Turbólégcsavaros', short: 'TP', cruise: 180, approach: 130 },
@@ -1644,6 +1647,50 @@ class Sim {
         return a.kind === 'arr' && a.runway != null && (a.state === 'airborne' || a.state === 'final') && !a.hold;
     }
 
+    // a gép várható helyei és magasságai a következő másodpercekben: a tervezett útja mentén,
+    // a valódi fordulási ívével (a jelenlegi irányából fordul a következő pont felé)
+    _futureTrack(a) {
+        const v = Math.max(a.spd, 60) * KT_TO_NMPS;
+        const path = this._plannedPath(a, v * CONFLICT_HORIZON_S + 3);
+        const rate = this._turnRate();
+        let x = a.x;
+        let y = a.y;
+        let hdg = a.hdg;
+        let idx = 1;
+        const dAlt = a.targetAlt - a.alt;
+        const vr = dAlt > 0 ? CLIMB_RATE : DESCENT_RATE;
+        const out = [];
+        for (let t = 1; t <= CONFLICT_HORIZON_S; t++) {
+            if (a.hold) {
+                hdg = norm360(hdg + rate);
+            } else {
+                while (idx < path.length - 1 && dist([x, y], path[idx]) < 0.6) idx++;
+                const target = path[Math.min(idx, path.length - 1)];
+                if (dist([x, y], target) > 0.2) hdg = norm360(hdg + clamp(angleDiff(hdg, bearing([x, y], target)), -rate, rate));
+            }
+            x += Math.sin(toRad(hdg)) * v;
+            y += Math.cos(toRad(hdg)) * v;
+            out.push({ pos: [x, y], alt: a.alt + Math.sign(dAlt) * Math.min(Math.abs(dAlt), vr * t) });
+        }
+        return out;
+    }
+
+    // a következő 45 mp-ben elveszítenék-e az elkülönítést (mindkettő a saját útján repül tovább)
+    _willConflict(a, b) {
+        const cache = this._trackCache || new Map();
+        if (!cache.has(a)) cache.set(a, this._futureTrack(a));
+        if (!cache.has(b)) cache.set(b, this._futureTrack(b));
+        const fa = cache.get(a);
+        const fb = cache.get(b);
+        for (let t = 0; t < CONFLICT_HORIZON_S; t++) {
+            const pa = fa[t];
+            const pb = fb[t];
+            if (this.rules.altitude && Math.abs(pa.alt - pb.alt) >= SEPARATION.lossFt) continue;
+            if (dist(pa.pos, pb.pos) < SEPARATION.lossNm) return true;
+        }
+        return false;
+    }
+
     // közelednek-e egymáshoz (a relatív sebesség a másik felé mutat)
     _closing(a, b) {
         const va = [Math.sin(toRad(a.hdg)) * a.spd, Math.cos(toRad(a.hdg)) * a.spd];
@@ -1656,6 +1703,7 @@ class Sim {
     _checkSeparation() {
         const air = this.aircraft.filter((a) => a.kind !== 'mil' && (a.state === 'airborne' || a.state === 'final' || (a.state === 'takeoff' && a.alt > 0)));
         for (const a of this.aircraft) a.conflict = false;
+        this._trackCache = new Map();
         const activePairs = new Set();
         const crashed = new Set();
         const useAlt = this.rules.altitude;
@@ -1664,16 +1712,16 @@ class Sim {
                 const a = air[i];
                 const b = air[j];
                 const d = dist([a.x, a.y], [b.x, b.y]);
-                if (d >= SEPARATION.warnNm) continue;
+                if (d >= CONFLICT_SCAN_NM) continue;
                 const v = useAlt ? Math.abs(a.alt - b.alt) : 0;
-                if (v >= SEPARATION.warnFt) continue;
                 // a leszállási és felszállási sávban (végső megközelítés, felszállás) a gépeket a pálya
                 // vezeti egymás mögött vagy párhuzamosan: ott nincs figyelmeztetés és incidens, csak ütközés
                 if (this._runwayProtected(a) && this._runwayProtected(b) && d > SEPARATION.crashNm) continue;
                 // két leszálló (kifutóval rendelkező érkező) egymáshoz képest: nincs jelzés, csak ütközés
                 if (this._landing(a) && this._landing(b) && d > SEPARATION.crashNm) continue;
-                // figyelmeztetés csak valódi veszélynél: nagyon közel vannak, vagy közelednek / keresztezik egymás útját
-                if (d < SEPARATION.lossNm || this._closing(a, b) || this._pathsCross(a, b)) {
+                // figyelmeztetés csak valódi veszélynél: már túl közel vannak, vagy a tervezett útjukon
+                // a következő 45 mp-ben túl közel kerülnének egymáshoz (ha elférnek egymás mellett, nincs jelzés)
+                if ((d < SEPARATION.lossNm && v < SEPARATION.lossFt) || this._willConflict(a, b)) {
                     a.conflict = true;
                     b.conflict = true;
                 }
@@ -1700,6 +1748,7 @@ class Sim {
             }
         }
         this.lossPairs = activePairs;
+        this._trackCache = null;
         // „Korai radar”: ha 5 mp múlva konfliktus lenne, már most sárgán jelez
         for (const a of this.aircraft) a.predicted = false;
         if (this.hasPerk('earlyRadar')) {
