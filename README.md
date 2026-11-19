@@ -75,7 +75,10 @@ automatikusan visszalép ugyanabba a szobába, ugyanazzal a poszttal.
 
 A posztokat a lobbiban választjátok ki; ha egy poszt üres vagy ketten választották, a játék szól.
 Játék közben a kijelölt gépnél **„Átadom neki”** gombbal átadhatod egy társadnak, vagy **„Átvétel kérése”**
-gombbal elkérheted tőle; a másik fél elfogadja vagy elutasítja.
+gombbal elkérheted tőle; a másik fél elfogadja vagy elutasítja. Hárman a **„Közösbe (bárki)”** választással
+bedobhatod a gépet a közösbe: mindenki megkapja a kérést, és aki elsőként elfogadja, azé lesz.
+
+Ha két gép összeütközik, vége a műszaknak.
 
 A többiek a 4 betűs szobakóddal vagy a megosztott linkkel lépnek be.
 

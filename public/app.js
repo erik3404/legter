@@ -171,6 +171,13 @@
             case 'handoffReq':
                 showHandoffRequest(m);
                 break;
+            case 'handoffClosed':
+                if (state.handoffReq === m.reqId) {
+                    $('handoff-req').hidden = true;
+                    clearTimeout(alerts.handoffTimer);
+                    state.handoffReq = null;
+                }
+                break;
             case 'queued':
                 $('queued').textContent = m.count ? `${m.count} parancs vár a folytatásra` : '';
                 break;
@@ -399,7 +406,10 @@
 
     function showHandoffRequest(m) {
         const box = $('handoff-req');
-        $('handoff-text').innerHTML = m.give
+        state.handoffReq = m.reqId;
+        $('handoff-text').innerHTML = m.pool
+            ? `<b style="color:${m.color}">${esc(m.from)}</b> a közösbe dobta: <b>${esc(m.cs)}</b> – átveszed?`
+            : m.give
             ? `<b style="color:${m.color}">${esc(m.from)}</b> át szeretné adni neked: <b>${esc(m.cs)}</b>`
             : `<b style="color:${m.color}">${esc(m.from)}</b> átvenné tőled: <b>${esc(m.cs)}</b>`;
         box.hidden = false;
@@ -408,6 +418,7 @@
             send({ t: 'handoffReply', reqId: m.reqId, accept });
             box.hidden = true;
             clearTimeout(alerts.handoffTimer);
+            state.handoffReq = null;
         };
         $('handoff-yes').onclick = () => close(true);
         $('handoff-no').onclick = () => close(false);
@@ -617,7 +628,7 @@
             if (!locked) {
                 const others = room.players.filter((p) => p.id !== state.me);
                 ownerNote += `<div class="btn-row handoff-row"><span class="hint">Átadás:</span>
-                    <select id="handoff-to">${others.map((p) => `<option value="${p.id}" ${state.handoffTo === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
+                    <select id="handoff-to">${others.length > 1 ? `<option value="all" ${state.handoffTo === 'all' ? 'selected' : ''}>Közösbe (bárki)</option>` : ''}${others.map((p) => `<option value="${p.id}" ${state.handoffTo === p.id ? 'selected' : ''}>${esc(p.name)}</option>`).join('')}</select>
                     <button class="btn" data-act="handoff">Átadom neki</button></div>`;
             } else {
                 ownerNote += '<div class="btn-row handoff-row"><button class="btn" data-act="handoff">Átvétel kérése</button></div>';
@@ -1579,38 +1590,74 @@
             h = (p.h || 0) * Math.PI / 180;
             out.push({ x, y, seg: 0 });
         }
-        // célpontok: útpontok, majd a vég (érkezőnél a csatlakozás és a tengely pontjai, egyébként a kapu)
-        const targets = route.map((q, i) => ({ p: q, seg: i, sw: 0.6 }));
-        if (a.k === 'arr' && end.length) {
-            const thr = end[end.length - 1];
-            const approach = end.slice(0, -1);
-            approach.forEach((q, i) => targets.push({ p: q, seg: route.length + i, sw: i === approach.length - 1 ? 0.25 : 0.6 }));
-            // a csatlakozástól a küszöbig a tengely pontjai, hogy a ráfordulás íve is látsszon
-            const from = approach.length ? approach[approach.length - 1] : [x, y];
-            const n = Math.max(1, Math.round(Math.hypot(thr[0] - from[0], thr[1] - from[1]) / 0.5));
-            for (let i = 1; i <= n; i++) targets.push({ p: [from[0] + (thr[0] - from[0]) * i / n, from[1] + (thr[1] - from[1]) * i / n], seg: 99, sw: 0.15 });
-        } else {
-            end.forEach((q, i) => targets.push({ p: q, seg: route.length + i, sw: 0.6 }));
-        }
         const ds = 0.06;
         let steps = 0;
-        for (const t of targets) {
-            while (Math.hypot(t.p[0] - x, t.p[1] - y) > t.sw && steps < 1500) {
-                const want = Math.atan2(t.p[0] - x, t.p[1] - y);
-                let d = want - h;
-                while (d > Math.PI) d -= 2 * Math.PI;
-                while (d < -Math.PI) d += 2 * Math.PI;
-                const maxTurn = ds / radius;
-                h += Math.max(-maxTurn, Math.min(maxTurn, d));
-                x += Math.sin(h) * ds;
-                y += Math.cos(h) * ds;
-                if (steps % 3 === 0) out.push({ x, y, seg: t.seg });
-                steps++;
+        const maxTurn = ds / radius;
+        const step = (want, seg) => {
+            let d = want - h;
+            while (d > Math.PI) d -= 2 * Math.PI;
+            while (d < -Math.PI) d += 2 * Math.PI;
+            h += Math.max(-maxTurn, Math.min(maxTurn, d));
+            x += Math.sin(h) * ds;
+            y += Math.cos(h) * ds;
+            if (steps % 3 === 0) out.push({ x, y, seg });
+            steps++;
+        };
+        const pursue = (p, sw, seg, stop) => {
+            while (Math.hypot(p[0] - x, p[1] - y) > sw && steps < 1500) {
+                if (stop && stop()) return;
+                step(Math.atan2(p[0] - x, p[1] - y), seg);
             }
-        }
-        if (targets.length) {
-            const last = targets[targets.length - 1];
-            out.push({ x: last.p[0], y: last.p[1], seg: last.seg });
+        };
+        route.forEach((q, i) => pursue(q, 0.6, i));
+        if (a.k === 'arr' && a.rw != null && end.length) {
+            // ugyanúgy, ahogy a szerver vezeti: kerülő pont, időben kezdett ráfordulás a csatlakozásnál,
+            // majd a tengely követése legfeljebb 30°-os ráfordulással – így nem lesz hurok a vonalban
+            const rw = state.info.runways[a.rw];
+            const thr = end[end.length - 1];
+            const other = rw.ends[1 - rwState(a.rw).e];
+            const len = Math.hypot(other[0] - thr[0], other[1] - thr[1]) || 1;
+            const ux = (thr[0] - other[0]) / len;
+            const uy = (thr[1] - other[1]) / len;
+            const lh = Math.atan2(-ux, -uy);
+            const approach = a.st === 'final' ? [] : end.slice(0, -1);
+            approach.forEach((q, i) => {
+                const last = i === approach.length - 1;
+                const seg = route.length + i;
+                if (!last) { pursue(q, 1, seg); return; }
+                pursue(q, 0.25, seg, () => {
+                    let ang = Math.abs(lh - h);
+                    while (ang > Math.PI) ang = Math.abs(ang - 2 * Math.PI);
+                    const lead = radius * Math.tan(Math.min(ang, Math.PI / 2) / 2) + 0.2;
+                    return Math.hypot(q[0] - x, q[1] - y) <= Math.max(0.5, lead);
+                });
+            });
+            while (steps < 1500) {
+                const rx = x - thr[0];
+                const ry = y - thr[1];
+                const along = rx * ux + ry * uy;
+                if (along <= 0.05) break;
+                const cross = rx * uy - ry * ux;
+                const ahead = Math.max(1.0, Math.abs(cross) * 1.5);
+                const k = Math.max(0, along - ahead);
+                let want = Math.atan2(thr[0] + ux * k - x, thr[1] + uy * k - y);
+                let off = want - lh;
+                while (off > Math.PI) off -= 2 * Math.PI;
+                while (off < -Math.PI) off += 2 * Math.PI;
+                const lim = Math.PI / 6;
+                if (Math.abs(off) > lim) want = lh + Math.sign(off) * lim;
+                step(want, 99);
+            }
+            out.push({ x: thr[0], y: thr[1], seg: 99 });
+        } else {
+            end.forEach((q, i) => pursue(q, 0.6, route.length + i));
+            if (end.length) {
+                const q = end[end.length - 1];
+                out.push({ x: q[0], y: q[1], seg: route.length + end.length - 1 });
+            } else if (route.length) {
+                const q = route[route.length - 1];
+                out.push({ x: q[0], y: q[1], seg: route.length - 1 });
+            }
         }
         return out;
     }
@@ -2316,7 +2363,7 @@
         // a kártya ötször újrarajzolódik másodpercenként: a választást megjegyezzük,
         // a gombok pedig már lenyomáskor reagálnak, hogy egy kattintás se vesszen el
         $('sel-card').addEventListener('change', (e) => {
-            if (e.target.id === 'handoff-to') state.handoffTo = Number(e.target.value);
+            if (e.target.id === 'handoff-to') state.handoffTo = e.target.value === 'all' ? 'all' : Number(e.target.value);
         });
         $('sel-card').onpointerdown = (e) => {
             if (e.button !== 0) return;
@@ -2334,7 +2381,7 @@
             else if (act === 'exit') cmd('changeExit', { id, gate: b.dataset.gate });
             else if (act === 'handoff') {
                 const toSel = $('handoff-to');
-                send({ t: 'handoff', id, to: toSel ? Number(toSel.value) : undefined });
+                send({ t: 'handoff', id, to: toSel ? (toSel.value === 'all' ? 'all' : Number(toSel.value)) : undefined });
                 addLog('info', 'Kérés elküldve, várjuk a választ…');
             }
             else if (act === 'alt') cmd('altitude', { id, delta: Number(b.dataset.d) });
@@ -2395,6 +2442,7 @@
         if (sess && (!urlRoom || urlRoom.toUpperCase() === sess.code)) send({ t: 'resume', code: sess.code, token: sess.token });
         renderLobby();
         window.__legterDebug = state;
+        window.__legterPredict = predictPath;
     }
 
     main();

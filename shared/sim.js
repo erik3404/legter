@@ -178,7 +178,7 @@ class Sim {
         this.lossPairs = new Set();
         this.stormHits = new Set();
         const gentle = this.shift.opening === 'gentle';
-        this.openingArrivals = gentle ? 0 : 3;
+        this.openingArrivals = gentle ? 0 : 2;
         this.timers = {
             arrival: gentle ? 20 : 3,
             departure: gentle ? 70 : 40,
@@ -458,11 +458,11 @@ class Sim {
     _trafficLevel() {
         const minutes = this.time / 60 - (this.shift.opening === 'gentle' ? 4 : 0);
         // több reptérnél arányosan több forgalom, hogy mindenkinek jusson munka
-        const factor = 1 / (this.shift.traffic / 100) / (1 + 0.8 * (this.airports.length - 1));
+        const factor = 1 / (this.shift.traffic / 100) / (1 + 0.6 * (this.airports.length - 1));
         return {
-            arrival: (clamp(55 - minutes * 1.5, 28, 70) + (this.hasPerk('spacing') ? 3 + (this._airborneCount() > 6 * this.airports.length ? 8 : 0) : 0)) * factor,
-            departure: clamp(60 - minutes * 1.2, 32, 80) * factor,
-            transit: clamp(110 - minutes * 2, 60, 140) * factor
+            arrival: (clamp(78 - minutes * 1.5, 42, 95) + (this.hasPerk('spacing') ? 3 + (this._airborneCount() > 6 * this.airports.length ? 8 : 0) : 0)) * factor,
+            departure: clamp(84 - minutes * 1.2, 46, 105) * factor,
+            transit: clamp(150 - minutes * 2, 85, 190) * factor
         };
     }
 
@@ -498,7 +498,7 @@ class Sim {
             else ok = this.aircraft.filter((a) => a.state === 'ground').length < 6 * this.airports.length ? this._spawnDeparture() : true;
             if (ok && key === 'arrival' && this.openingArrivals > 0) {
                 this.openingArrivals -= 1;
-                this.timers[key] = rand(10, 13);
+                this.timers[key] = rand(18, 24);
             } else {
                 this.timers[key] = ok ? level[key] * rand(0.8, 1.2) : 5;
             }
@@ -1683,6 +1683,11 @@ class Sim {
                     crashed.add(b);
                     this._incident(a, `ütközött: ${b.callsign}`);
                     this._incident(b, `ütközött: ${a.callsign}`);
+                    // két gép ütközése: vége a műszaknak
+                    if (!this.gameOver) {
+                        this.gameOver = { reason: `${a.callsign} és ${b.callsign} összeütközött.`, callsign: a.callsign };
+                        this._event('incident', `VÉGE A MŰSZAKNAK: ${a.callsign} és ${b.callsign} összeütközött.`, a.id, 'incident');
+                    }
                 } else if (d < SEPARATION.lossNm && v < SEPARATION.lossFt) {
                     activePairs.add(key);
                     if (!this.lossPairs.has(key)) this._incident(a, `elkülönítés elveszett ${b.callsign} géppel`);

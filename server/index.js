@@ -465,33 +465,54 @@ function handle(ws, msg) {
             const players = publicPlayers(room);
             const view = compactForRules(room, ac);
             const mine = Rules.canControl(view, player, room.settings, players);
-            let to;
-            if (mine) to = room.players.get(Number(msg.to));
-            else to = room.players.get(Rules.ownersOf(view, room.settings, players).map((p) => p.id)[0]);
-            if (!to || to === player) return send(ws, { t: 'cmdResult', ok: false, text: 'Nincs kinek átadni.' });
+            // „Közösbe dobom”: mindenki más megkapja, aki elsőként elfogadja, azé lesz
+            const pool = mine && msg.to === 'all';
+            let targets;
+            if (pool) targets = [...room.players.values()].filter((p) => p !== player);
+            else if (mine) targets = [room.players.get(Number(msg.to))].filter(Boolean);
+            else targets = [room.players.get(Rules.ownersOf(view, room.settings, players).map((p) => p.id)[0])].filter(Boolean);
+            targets = targets.filter((p) => p !== player);
+            if (!targets.length) return send(ws, { t: 'cmdResult', ok: false, text: 'Nincs kinek átadni.' });
             const reqId = room.nextReqId = (room.nextReqId || 0) + 1;
             room.requests = room.requests || new Map();
-            room.requests.set(reqId, { id: ac.id, from: player.id, to: to.id, give: mine, at: Date.now() });
-            send(to.ws, {
-                t: 'handoffReq', reqId, id: ac.id, cs: ac.callsign, from: player.name, color: player.color, give: mine
+            room.requests.set(reqId, { id: ac.id, from: player.id, to: targets.map((p) => p.id), give: mine, pool, at: Date.now() });
+            for (const to of targets) {
+                send(to.ws, {
+                    t: 'handoffReq', reqId, id: ac.id, cs: ac.callsign, from: player.name, color: player.color, give: mine, pool
+                });
+            }
+            send(ws, {
+                t: 'log',
+                kind: 'info',
+                text: pool ? `${ac.callsign}: bedobva a közösbe – aki elsőként elfogadja, átveszi.`
+                    : mine ? `${ac.callsign}: átadási kérés elküldve ${targets[0].name} részére.` : `${ac.callsign}: átvételi kérés elküldve ${targets[0].name} részére.`
             });
-            send(ws, { t: 'log', kind: 'info', text: mine ? `${ac.callsign}: átadási kérés elküldve ${to.name} részére.` : `${ac.callsign}: átvételi kérés elküldve ${to.name} részére.` });
             break;
         }
         case 'handoffReply': {
             const req = room.requests && room.requests.get(msg.reqId);
-            if (!req || req.to !== player.id || !room.sim) return;
-            room.requests.delete(msg.reqId);
+            if (!req || !req.to.includes(player.id) || !room.sim) return;
             const ac = room.sim.find(req.id);
             const from = room.players.get(req.from);
-            if (!ac) return;
-            if (Date.now() - req.at > 30000) return send(ws, { t: 'cmdResult', ok: false, text: 'A kérés lejárt.' });
+            const closeFor = (ids) => ids.forEach((pid) => { const p = room.players.get(pid); if (p) send(p.ws, { t: 'handoffClosed', reqId: msg.reqId }); });
+            if (!ac) { room.requests.delete(msg.reqId); closeFor(req.to); return; }
+            if (Date.now() - req.at > 30000) {
+                room.requests.delete(msg.reqId);
+                closeFor(req.to);
+                return send(ws, { t: 'cmdResult', ok: false, text: 'A kérés lejárt.' });
+            }
             if (msg.accept) {
+                room.requests.delete(msg.reqId);
+                closeFor(req.to.filter((pid) => pid !== player.id));
                 ac.controller = req.give ? player.id : req.from;
                 const owner = room.players.get(ac.controller);
                 broadcast(room, { t: 'log', kind: 'info', text: `${ac.callsign} mostantól ${owner ? owner.name : '?'} irányítása alatt.` });
-            } else if (from) {
-                send(from.ws, { t: 'log', kind: 'warn', text: `${player.name} elutasította: ${ac.callsign}.` });
+            } else {
+                req.to = req.to.filter((pid) => pid !== player.id);
+                if (!req.to.length) {
+                    room.requests.delete(msg.reqId);
+                    if (from) send(from.ws, { t: 'log', kind: 'warn', text: req.pool ? `${ac.callsign}: senki sem vette át.` : `${player.name} elutasította: ${ac.callsign}.` });
+                }
             }
             break;
         }

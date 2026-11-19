@@ -137,7 +137,7 @@
         }
     };
 
-    const TRAFFIC_LEVELS = { 50: 0.5, 75: 0.75, 100: 1, 125: 1.25, 150: 1.5 };
+    const TRAFFIC_LEVELS = { 25: 0.3, 50: 0.5, 75: 0.75, 100: 1, 125: 1.25, 150: 1.5 };
 
     const PRACTICE = {
         all: 'Teljes forgalom',
