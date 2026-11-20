@@ -63,7 +63,7 @@
                     <div class="kicker">Te vagy az irányító</div>
                     <h2>Válassz ki egy gépet.</h2>
                     <p>Kattints egy gépre a térképen vagy a listában. Utána kattints a térképre útpontért,
-                        nyomd meg a kifutó számát (1–9) a leszálláshoz, vagy az <kbd>X</kbd>-et a felszálláshoz.</p>
+                        nyomd meg a kifutó számát (1–9): érkezőnél leszállás, indulónál kifutóválasztás (ugyanaz a szám még egyszer, vagy <kbd>X</kbd> = felszállás).</p>
                 </div>
             </section>
             <section class="panel list-panel">
@@ -184,6 +184,19 @@
     </div>
 </div>
 
+<!-- Tipp (tanító felugró, böngészőnként egyszer) -->
+<div id="hint-pop" class="hint-pop" hidden>
+    <div class="hint-ico" id="hint-ico">💡</div>
+    <div class="hint-main">
+        <div class="hint-title" id="hint-title"></div>
+        <div class="hint-body" id="hint-body"></div>
+        <div class="hint-actions">
+            <button id="hint-ok" class="btn primary">Értem</button>
+            <button id="hint-off" class="btn ghost">Ne mutass több tippet</button>
+        </div>
+    </div>
+</div>
+
 <!-- Átadási kérés -->
 <div id="handoff-req" class="handoff-req" hidden>
     <div id="handoff-text"></div>
@@ -204,7 +217,7 @@
                 <h3>Billentyűzet</h3>
                 <table class="keys">
                     <tr><td><kbd>Szóköz</kbd></td><td>Szünet / folytatás (szobagazda)</td></tr>
-                    <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>Kifutó kiválasztása (érkezőnél: leszállás, indulónál: felszálló kifutó)</td></tr>
+                    <tr><td><kbd>1</kbd>–<kbd>9</kbd></td><td>Kifutó kiválasztása (érkezőnél: leszállás; indulónál: felszálló kifutó, ugyanaz a szám még egyszer = felszállás)</td></tr>
                     <tr><td><kbd>X</kbd></td><td>Felszállás</td></tr>
                     <tr><td><kbd>R</kbd></td><td>Várakozó körözés be/ki</td></tr>
                     <tr><td><kbd>G</kbd></td><td>Átstartolás végső megközelítésen</td></tr>

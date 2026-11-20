@@ -105,6 +105,11 @@
             off: 0.9, on: 1
         },
         {
+            key: 'stormHeavy', group: 'events', label: 'Időjárás mód (sok vihar)',
+            desc: 'Egyszerre több zivatar (akár 3) sodródik a légtérben, gyakrabban és gyorsabban mozognak. A magjuk kicsi marad, így cikkcakkban elkormányozhatod a gépeket közöttük – de oda kell figyelni. Bekapcsolja a zivatarokat is.',
+            off: 1, on: 1.25
+        },
+        {
             key: 'fog', group: 'events', label: 'Köd',
             desc: 'Ritkán egy kis ködfolt sodródik a légtérben. A benne repülő gép nem tudja, hol jár: egyenesen repül tovább, és amíg ki nem ér, nem irányítható.',
             off: 0.95, on: 1
@@ -129,11 +134,15 @@
     const PRESETS = {
         classic: {
             label: 'Klasszikus',
-            rules: { altitude: false, manualRouting: false, pauseQueue: false, randomGates: false, constraints: true, emergencies: true, storms: true, fog: true, security: true, showAllRoutes: false, noPerks: false }
+            rules: { altitude: false, manualRouting: false, pauseQueue: false, randomGates: false, constraints: true, emergencies: true, storms: true, stormHeavy: false, fog: true, security: true, showAllRoutes: false, noPerks: false }
+        },
+        weather: {
+            label: 'Időjárás',
+            rules: { altitude: false, manualRouting: false, pauseQueue: false, randomGates: false, constraints: false, emergencies: false, storms: true, stormHeavy: true, fog: true, security: false, showAllRoutes: false, noPerks: false }
         },
         hard: {
             label: 'Nehéz',
-            rules: { altitude: true, manualRouting: true, pauseQueue: true, randomGates: true, constraints: true, emergencies: true, storms: true, fog: true, security: true, showAllRoutes: false, noPerks: false }
+            rules: { altitude: true, manualRouting: true, pauseQueue: true, randomGates: true, constraints: true, emergencies: true, storms: true, stormHeavy: false, fog: true, security: true, showAllRoutes: false, noPerks: false }
         }
     };
 
@@ -169,6 +178,8 @@
                 if (typeof input.rules[def.key] === 'boolean') out.rules[def.key] = input.rules[def.key];
             }
         }
+        // az időjárás mód bekapcsolja a zivatarokat is
+        if (out.rules.stormHeavy) out.rules.storms = true;
         if (TRAFFIC_LEVELS[input.traffic]) out.traffic = Number(input.traffic);
         if (PRACTICE[input.practice]) out.practice = input.practice;
         if (OPENINGS[input.opening]) out.opening = input.opening;

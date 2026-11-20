@@ -186,7 +186,7 @@ class Sim {
             arrival: gentle ? 20 : 3,
             departure: gentle ? 70 : 40,
             transit: gentle ? 90 : 45,
-            storm: rand(180, 300),
+            storm: this.rules.stormHeavy ? rand(25, 60) : rand(180, 300),
             fog: rand(120, 240),
             emergency: rand(200, 300),
             hijack: rand(420, 600),
@@ -832,7 +832,8 @@ class Sim {
             x: pos[0], y: pos[1],
             r,
             hdg: norm360(bearing(pos, [0, 0]) + rand(-70, 70)),
-            spd: hurricane ? rand(0.012, 0.018) : rand(0.006, 0.012), // nm/s – lassú
+            // időjárás módban gyorsabban sodródnak (de a magjuk kicsi marad, így elkormányozhatók)
+            spd: hurricane ? rand(0.012, 0.018) : this.rules.stormHeavy ? rand(0.012, 0.02) : rand(0.006, 0.012), // nm/s
             hurricane,
             age: 0,
             life: kind === 'storm' ? rand(600, 900) : rand(500, 800),
@@ -857,7 +858,7 @@ class Sim {
             if (c.turnIn <= 0) {
                 c.turnIn = rand(90, 180);
                 c.hdg = norm360(c.hdg + rand(-30, 30));
-                c.spd = clamp(c.spd * rand(0.8, 1.2), 0.004, c.hurricane ? 0.02 : 0.014);
+                c.spd = clamp(c.spd * rand(0.8, 1.2), 0.004, c.hurricane ? 0.02 : this.rules.stormHeavy ? 0.022 : 0.014);
             }
             c.x += Math.sin(toRad(c.hdg)) * c.spd * dt;
             c.y += Math.cos(toRad(c.hdg)) * c.spd * dt;
@@ -867,10 +868,13 @@ class Sim {
 
     _weatherTick(dt) {
         if (this.rules.storms) {
+            // időjárás módban egyszerre több zivatar, gyakrabban; egyébként egy, ritkán
+            const heavy = this.rules.stormHeavy;
+            const maxStorms = heavy ? Math.min(3, 2 + Math.floor(this.airports.length / 2)) : 1;
             this.timers.storm -= dt;
             if (this.timers.storm <= 0) {
-                this.timers.storm = rand(360, 600);
-                if (!this.storms.length) this._spawnWeather('storm');
+                this.timers.storm = heavy ? rand(80, 160) : rand(360, 600);
+                if (this.storms.filter((s) => !s.hurricane).length < maxStorms) this._spawnWeather('storm');
             }
         }
         if (this.rules.fog) {
@@ -1429,6 +1433,17 @@ class Sim {
             }
         }
         if (target) this._turnToward(a, bearing([a.x, a.y], target), dt);
+        // érkező kézi útpontokon is süllyedjen a siklópályára: a hátralévő út (útpontok + a küszöbig)
+        // alapján. Enélkül az útpontokat követő gép fent ragad, és az utolsó pont után túl magas lenne.
+        if (a.kind === 'arr' && a.runway != null && a.route.length && a.state !== 'final' && !a.hold) {
+            const thr = this.threshold(this.runways[a.runway]);
+            let remain = 0;
+            let prev = [a.x, a.y];
+            for (const p of a.route) { remain += dist(prev, p); prev = p; }
+            remain += dist(prev, thr);
+            a.targetAlt = Math.min(a.targetAlt, Math.max(ALT.min, Math.round(remain * GLIDE_FT_PER_NM / 100) * 100));
+            if (a.alt > remain * GLIDE_FT_PER_NM + 300) expedite = true;
+        }
         // magasság nélküli játékban az indulók és átrepülők maguktól a kilépési szintre emelkednek
         if (!this.rules.altitude && a.kind !== 'arr') a.targetAlt = Math.max(a.targetAlt, 9000);
         this._approachSpeedAndAlt(a, dt, expedite);

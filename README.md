@@ -87,6 +87,7 @@ A többiek a 4 betűs szobakóddal vagy a megosztott linkkel lépnek be.
 ## Események
 
 - **Zivatar**: zöld és sárga rész átrepülhető, a piros magba repülés a műszak végét jelenti. 1% eséllyel hurrikán lesz belőle.
+- **Időjárás mód** (külön beállítás vagy az „Időjárás" előbeállítás): egyszerre több zivatar (akár 3) sodródik a légtérben, gyakrabban és gyorsabban mozognak, de a magjuk kicsi marad, így cikkcakkban elkormányozhatod a gépeket közöttük.
 - **Köd**: a benne repülő gép egyenesen halad, és amíg ki nem ér, nem irányítható.
 - **Vészhelyzet / kényszerleszállás**: 6 percen belül le kell szállnia. Kényszerleszállásnál amíg le nem száll,
   a repterén senki más nem szállhat le.

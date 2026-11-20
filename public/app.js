@@ -127,6 +127,8 @@
                 if (soloPending) {
                     soloPending = false;
                 }
+                // visszacsatlakozáskor nem írjuk felül a szoba meglévő beállításait
+                if (!m.resumed) restoreShift();
                 renderLobby();
                 break;
             case 'room':
@@ -286,6 +288,30 @@
         return !a || canControl(a);
     }
 
+    // tanító tippek: böngészőnként egyszer jelennek meg, egy kártyán, az „Értem” gombig maradnak
+    function hintsSeen() {
+        try { return new Set(JSON.parse(localStorage.getItem('legter-hints') || '[]')); } catch (e) { return new Set(); }
+    }
+    function hintsOff() {
+        try { return localStorage.getItem('legter-hints-off') === '1'; } catch (e) { return false; }
+    }
+    let hintOpen = false;
+    function showHint(id, title, body, ico) {
+        if (hintsOff() || hintOpen) return;
+        const seen = hintsSeen();
+        if (seen.has(id)) return;
+        seen.add(id);
+        try { localStorage.setItem('legter-hints', JSON.stringify([...seen])); } catch (e) { /* nem baj */ }
+        hintOpen = true;
+        $('hint-ico').textContent = ico || '💡';
+        $('hint-title').textContent = title;
+        $('hint-body').innerHTML = body;
+        $('hint-pop').hidden = false;
+        const close = () => { $('hint-pop').hidden = true; hintOpen = false; };
+        $('hint-ok').onclick = close;
+        $('hint-off').onclick = () => { try { localStorage.setItem('legter-hints-off', '1'); } catch (e) { /* nem baj */ } close(); };
+    }
+
     function showToast(html, cls, aircraftId) {
         const t = $('toast');
         t.className = cls || '';
@@ -307,6 +333,11 @@
             void panel.offsetWidth;
             panel.classList.add('flash');
             alerts.lastDepReminder = performance.now();
+            showHint('takeoff', 'Induló gép felszállásra kész',
+                'Jelöld ki a gépet (a listában vagy a térképen), nyomd meg a kifutó <b>számát</b> (<kbd>1</kbd>–<kbd>6</kbd>), majd <b>ugyanazt a számot még egyszer</b> vagy az <kbd>X</kbd>-et a felszálláshoz. A kijárat felé magától elindul.', '🛫');
+        } else if (ev.sound === 'arrival') {
+            showHint('arrival', 'Érkező gép a légtérben',
+                'Jelöld ki, majd nyomd meg a <b>kifutó számát</b> (<kbd>1</kbd>–<kbd>6</kbd>) a leszálláshoz – a gép magától ráfordul a tengelyre és süllyed. Terelheted is: <b>kattints a térképre</b> útpontért. Figyeld az üzemanyagot (a gép adatblokkjában).', '🛬');
         } else if (ev.sound === 'emergency') {
             const a = state.acById.get(ev.aircraftId);
             showToast(a && a.pr ? `<b>${a.cs}</b> KÉNYSZERLESZÁLLÁS – amíg le nem száll, senki más nem szállhat le`
@@ -462,6 +493,10 @@
             alerts.lastConflictBeep = now;
             Sound.play('conflict');
         }
+        if (fresh && ids.size) {
+            showHint('conflict', 'Két gép túl közel kerül egymáshoz',
+                'A piros keret és a sípolás elkülönítés-vesztést jelez. <b>Fordítsd el</b> egyiket (kattints a térképre új irányért), <b>vagy</b> adj más <b>magasságot</b> (<kbd>C</kbd>/<kbd>D</kbd>), <b>vagy</b> lassíts (<kbd>S</kbd>). Ha a két gép összeütközik, vége a műszaknak.', '⚠️');
+        }
     }
 
     function checkDepartures() {
@@ -568,7 +603,7 @@
             if (!card.querySelector('.empty-sel')) {
                 card.innerHTML = `<div class="empty-sel"><div class="kicker">Te vagy az irányító</div><h2>Válassz ki egy gépet.</h2>
                 <p>Kattints egy gépre a térképen vagy a listában. Utána kattints a térképre útpontért,
-                nyomd meg a kifutó számát (1–9) a leszálláshoz, vagy az <kbd>X</kbd>-et a felszálláshoz.</p></div>`;
+                nyomd meg a kifutó számát (1–9): érkezőnél leszállás, indulónál kifutóválasztás (ugyanaz a szám még egyszer, vagy <kbd>X</kbd> = felszállás).</p></div>`;
             }
             return;
         }
@@ -697,6 +732,23 @@
 
     function pushShift(shift) {
         send({ t: 'settings', settings: { shift } });
+        // a műszak beállításait elmentjük erre a gépre (bejelentkezés nélkül), hogy legközelebb visszajöjjön
+        try { localStorage.setItem('legter-shift', JSON.stringify(shift)); } catch (e) { /* nem baj */ }
+    }
+
+    function savedShift() {
+        try {
+            const s = JSON.parse(localStorage.getItem('legter-shift') || 'null');
+            return s ? Rules.normalizeShift(s) : null;
+        } catch (e) { return null; }
+    }
+
+    // a szoba létrehozásakor (ha mi vagyunk a gazda) visszatöltjük a korábban mentett műszakot
+    function restoreShift() {
+        if (state.shiftRestored || !state.room || state.room.started || !isHost()) return;
+        const s = savedShift();
+        state.shiftRestored = true;
+        if (s) pushShift(s);
     }
 
     function renderLobby() {
@@ -807,9 +859,13 @@
         if (params.get('room')) $('in-code').value = params.get('room').toUpperCase();
         $('btn-solo').onclick = () => {
             soloPending = true;
+            state.shiftRestored = false;
             send({ t: 'create', name: getName(), settings: { mode: 'free', solo: true } });
         };
-        $('btn-create').onclick = () => send({ t: 'create', name: getName(), settings: { mode: 'airports', size: 2 } });
+        $('btn-create').onclick = () => {
+            state.shiftRestored = false;
+            send({ t: 'create', name: getName(), settings: { mode: 'airports', size: 2 } });
+        };
         $('btn-join').onclick = () => {
             const code = $('in-code').value.trim().toUpperCase();
             if (code.length !== 4) {
@@ -2344,7 +2400,18 @@
         if (!sel) return;
         if (/^[1-9]$/.test(key)) {
             const i = Number(key) - 1;
-            if (state.info && i < state.info.runways.length) cmd('runway', { id: sel.id, runway: i });
+            if (state.info && i < state.info.runways.length) {
+                cmd('runway', { id: sel.id, runway: i });
+                // induló gépnél ugyanannak a számnak a gyors kétszeri megnyomása = felszállás (az X helyett)
+                const now = performance.now();
+                if (sel.st === 'ground' && sel.k === 'dep' && state.lastRwKey
+                    && state.lastRwKey.id === sel.id && state.lastRwKey.i === i && now - state.lastRwKey.t < 1500) {
+                    cmd('takeoff', { id: sel.id });
+                    state.lastRwKey = null;
+                } else {
+                    state.lastRwKey = { id: sel.id, i, t: now };
+                }
+            }
             return;
         }
         if (key === 'x') cmd('takeoff', { id: sel.id });
