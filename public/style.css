@@ -398,15 +398,15 @@ table.keys td:first-child { white-space: nowrap; }
 }
 .handoff-req[hidden] { display: none; }
 
-/* tanító tipp */
+/* tanító tipp – a radar közepén, a játék közben megáll */
 .hint-pop {
-    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%); z-index: 30; width: min(460px, calc(100vw - 28px));
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); z-index: 30; width: min(440px, calc(100% - 32px));
     display: flex; gap: 14px; background: var(--panel); border: 1px solid var(--accent);
-    border-radius: 14px; padding: 16px 18px; box-shadow: 0 18px 46px rgba(0,0,0,.55);
-    animation: hint-in .22s ease; align-items: flex-start;
+    border-radius: 14px; padding: 18px 20px; box-shadow: 0 18px 60px rgba(0,0,0,.6);
+    animation: hint-in .2s ease; align-items: flex-start;
 }
 .hint-pop[hidden] { display: none; }
-@keyframes hint-in { from { opacity: 0; transform: translate(-50%, 14px); } to { opacity: 1; transform: translate(-50%, 0); } }
+@keyframes hint-in { from { opacity: 0; transform: translate(-50%, -46%); } to { opacity: 1; transform: translate(-50%, -50%); } }
 .hint-ico { font-size: 26px; line-height: 1; flex: none; }
 .hint-main { flex: 1; min-width: 0; }
 .hint-title { font: 600 15px var(--sans); margin-bottom: 5px; }

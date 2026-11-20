@@ -52,6 +52,18 @@
             <canvas id="scope"></canvas>
             <div id="wind" class="mono"></div>
             <div id="toast" hidden></div>
+            <!-- Tanító tipp (a radar közepén, böngészőnként egyszer) -->
+            <div id="hint-pop" class="hint-pop" hidden>
+                <div class="hint-ico" id="hint-ico">💡</div>
+                <div class="hint-main">
+                    <div class="hint-title" id="hint-title"></div>
+                    <div class="hint-body" id="hint-body"></div>
+                    <div class="hint-actions">
+                        <button id="hint-ok" class="btn primary">Értem</button>
+                        <button id="hint-off" class="btn ghost">Ne mutass több tippet</button>
+                    </div>
+                </div>
+            </div>
             <div id="chat-pop" hidden></div>
             <div id="reconnect" hidden>Megszakadt a kapcsolat – újracsatlakozás…</div>
             <button id="btn-fit" title="Teljes légtér mutatása">⌖</button>
@@ -181,19 +193,6 @@
         <h2>Jó munka! Válassz egy fejlesztést</h2>
         <p class="hint">A fejlesztés a műszak végéig megmarad. Multiban bárki választhat, és az egész csapat megkapja. A játék közben tovább megy.</p>
         <div id="review-cards" class="review-cards"></div>
-    </div>
-</div>
-
-<!-- Tipp (tanító felugró, böngészőnként egyszer) -->
-<div id="hint-pop" class="hint-pop" hidden>
-    <div class="hint-ico" id="hint-ico">💡</div>
-    <div class="hint-main">
-        <div class="hint-title" id="hint-title"></div>
-        <div class="hint-body" id="hint-body"></div>
-        <div class="hint-actions">
-            <button id="hint-ok" class="btn primary">Értem</button>
-            <button id="hint-off" class="btn ghost">Ne mutass több tippet</button>
-        </div>
     </div>
 </div>
 

@@ -307,7 +307,18 @@
         $('hint-title').textContent = title;
         $('hint-body').innerHTML = body;
         $('hint-pop').hidden = false;
-        const close = () => { $('hint-pop').hidden = true; hintOpen = false; };
+        // egyedül játszva álljon meg a játék a tipp idejére (többen nem fagyasztjuk le a többieket)
+        let pausedByHint = false;
+        const soloGame = state.room && state.room.players.length <= 1 && isHost();
+        if (soloGame && state.room.started && !state.room.paused) {
+            pausedByHint = true;
+            send({ t: 'pause' });
+        }
+        const close = () => {
+            $('hint-pop').hidden = true;
+            hintOpen = false;
+            if (pausedByHint && state.room && state.room.paused) send({ t: 'pause' });
+        };
         $('hint-ok').onclick = close;
         $('hint-off').onclick = () => { try { localStorage.setItem('legter-hints-off', '1'); } catch (e) { /* nem baj */ } close(); };
     }
@@ -1926,7 +1937,7 @@
             if (bx + w > W - 4) bx = sx - 16 - w;
             if (by < 4) by = sy + 14;
             // félig átlátszó háttér, hogy a mögötte lévő gépek is látsszanak
-            ctx.fillStyle = 'rgba(14,22,34,0.45)';
+            ctx.fillStyle = 'rgba(14,22,34,0.28)';
             ctx.fillRect(bx, by, w, 30);
             ctx.strokeStyle = a.cf ? COLORS.bad : a.em != null ? COLORS.em : 'rgba(201,212,227,0.25)';
             ctx.lineWidth = 1;
