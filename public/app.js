@@ -561,11 +561,14 @@
             .sort((a, b) => (state.firstAirspaceSeen.get(b.id) || 0) - (state.firstAirspaceSeen.get(a.id) || 0));
         $('dep-count').textContent = String(deps.length).padStart(2, '0');
         $('air-count').textContent = String(air.length).padStart(2, '0');
-        $('dep-list').innerHTML = deps.length ? deps.map((a) => rowHtml(a, true)).join('')
-            : '<div class="empty-list">Nincs várakozó induló.</div>';
-        $('air-list').innerHTML = air.length ? air.map((a) => rowHtml(a, false)).join('')
-            : '<div class="empty-list">Csend van. Hamarosan jön a forgalom.</div>';
+        // csak akkor írjuk újra a listát, ha tényleg változott – különben a másodpercenkénti
+        // ötszörös újraépítés elnyelheti a sorra leadott kattintást
+        const depHtml = deps.length ? deps.map((a) => rowHtml(a, true)).join('') : '<div class="empty-list">Nincs várakozó induló.</div>';
+        const airHtml = air.length ? air.map((a) => rowHtml(a, false)).join('') : '<div class="empty-list">Csend van. Hamarosan jön a forgalom.</div>';
+        if (depHtml !== lastListHtml.dep) { $('dep-list').innerHTML = depHtml; lastListHtml.dep = depHtml; }
+        if (airHtml !== lastListHtml.air) { $('air-list').innerHTML = airHtml; lastListHtml.air = airHtml; }
     }
+    const lastListHtml = { dep: null, air: null };
 
     function rowHtml(a, ground) {
         const cls = state.info ? state.info.classes[a.c].short : '';
@@ -2431,12 +2434,14 @@
 
     // ---------- oldalsáv gombjai ----------
     function bindSidebar() {
-        const onRowClick = (e) => {
+        // lenyomásra választunk (nem click-re): így egy lista-újraépítés sem nyeli el a kattintást
+        const onRowDown = (e) => {
+            if (e.pointerType === 'mouse' && e.button !== 0) return;
             const row = e.target.closest('.ac-row');
             if (row) select(Number(row.dataset.id));
         };
-        $('dep-list').onclick = onRowClick;
-        $('air-list').onclick = onRowClick;
+        $('dep-list').addEventListener('pointerdown', onRowDown);
+        $('air-list').addEventListener('pointerdown', onRowDown);
         // a kártya ötször újrarajzolódik másodpercenként: a választást megjegyezzük,
         // a gombok pedig már lenyomáskor reagálnak, hogy egy kattintás se vesszen el
         $('sel-card').addEventListener('change', (e) => {

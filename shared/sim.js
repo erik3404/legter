@@ -821,17 +821,26 @@ class Sim {
         const hurricane = kind === 'storm' && (this.forceHurricane || Math.random() < 0.01);
         const r = hurricane ? rand(6, 8) : kind === 'storm' ? rand(2.5, 3.5) : rand(2, 3.5);
         // a légtér belsejében, de a reptértől távolabb jelenik meg, és lassan befelé sodródik
-        let pos;
-        for (let tries = 0; tries < 20; tries++) {
-            pos = [rand(-this.airspace.hw + r, this.airspace.hw - r), rand(-this.airspace.hh + r, this.airspace.hh - r)];
-            const busy = this.aircraft.some((a) => a.state !== 'ground' && dist([a.x, a.y], pos) < r + 3);
-            if (Math.hypot(pos[0], pos[1]) > 9 && !busy) break;
+        // A meglévő viharoktól és ködfoltoktól távol, hogy ne gyűljenek egy helyre, hanem szét legyenek szórva.
+        const others = [...this.storms, ...this.fogs];
+        let pos = null;
+        let bestGap = -Infinity;
+        for (let tries = 0; tries < 40; tries++) {
+            const cand = [rand(-this.airspace.hw + r, this.airspace.hw - r), rand(-this.airspace.hh + r, this.airspace.hh - r)];
+            if (Math.hypot(cand[0], cand[1]) <= 9) continue;
+            if (this.aircraft.some((a) => a.state !== 'ground' && dist([a.x, a.y], cand) < r + 3)) continue;
+            // a legközelebbi meglévő időjárás-folt széléig mért hézag – a legnagyobbat keressük
+            const gap = others.length ? Math.min(...others.map((o) => dist([o.x, o.y], cand) - o.r - r)) : Infinity;
+            if (gap > bestGap) { bestGap = gap; pos = cand; }
+            if (gap > 7) break; // elég nagy hézag: elfogadjuk
         }
+        if (!pos) pos = [rand(-this.airspace.hw + r, this.airspace.hw - r), rand(-this.airspace.hh + r, this.airspace.hh - r)];
         const cell = {
             id: this.nextStormId++,
             x: pos[0], y: pos[1],
             r,
-            hdg: norm360(bearing(pos, [0, 0]) + rand(-70, 70)),
+            // időjárás módban szélesebb irányszórás, hogy ne mind a központ felé tartsanak (ott összeérnének)
+            hdg: norm360(bearing(pos, [0, 0]) + (this.rules.stormHeavy ? rand(-130, 130) : rand(-70, 70))),
             // időjárás módban gyorsabban sodródnak (de a magjuk kicsi marad, így elkormányozhatók)
             spd: hurricane ? rand(0.012, 0.018) : this.rules.stormHeavy ? rand(0.012, 0.02) : rand(0.006, 0.012), // nm/s
             hurricane,
@@ -859,6 +868,20 @@ class Sim {
                 c.turnIn = rand(90, 180);
                 c.hdg = norm360(c.hdg + rand(-30, 30));
                 c.spd = clamp(c.spd * rand(0.8, 1.2), 0.004, c.hurricane ? 0.02 : this.rules.stormHeavy ? 0.022 : 0.014);
+            }
+            // időjárás módban enyhe taszítás a legközelebbi másik folttól, hogy ne csússzanak egymásra
+            if (this.rules.stormHeavy && cells.length > 1) {
+                let near = null;
+                let nd = Infinity;
+                for (const o of cells) {
+                    if (o === c) continue;
+                    const d = dist([c.x, c.y], [o.x, o.y]);
+                    if (d < nd) { nd = d; near = o; }
+                }
+                if (near && nd < c.r + near.r + 4) {
+                    const away = bearing([near.x, near.y], [c.x, c.y]);
+                    c.hdg = norm360(c.hdg + clamp(angleDiff(c.hdg, away), -40 * dt, 40 * dt));
+                }
             }
             c.x += Math.sin(toRad(c.hdg)) * c.spd * dt;
             c.y += Math.cos(toRad(c.hdg)) * c.spd * dt;
